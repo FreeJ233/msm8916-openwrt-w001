@@ -7,7 +7,7 @@
 # 基于 MIT 开源协议，详见 /LICENSE
 
 # 修改默认IP地址
-#sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
+sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
 
 
 # 修改默认主题为 argon（路径不存在时跳过，不中断编译）
