@@ -14,10 +14,10 @@
 # echo 'src-git store https://github.com/linkease/istore.git;main' >> feeds.conf.default
 
 # OpenClash代理
-# git clone --depth 1 https://github.com/vernesong/OpenClash.git OpenClash
+git clone --depth 1 https://github.com/vernesong/OpenClash.git OpenClash
 
 # turboacc网络加速（需要用户在页面选择 luci-app-turboacc 后，由编译脚本自动执行，此处不再无条件运行）
-# curl -sSL https://raw.githubusercontent.com/mufeng05/turboacc/main/add_turboacc.sh -o add_turboacc.sh && bash add_turboacc.sh
+curl -sSL https://raw.githubusercontent.com/mufeng05/turboacc/main/add_turboacc.sh -o add_turboacc.sh && bash add_turboacc.sh
 
 # 调试
 # sed -i 's|src-git-full openstick https://github.com/lkiuyu/openstick-feeds.git|src-git-full openstick https://github.com/xuxin1955/openstick-feeds|g' feeds.conf.default
