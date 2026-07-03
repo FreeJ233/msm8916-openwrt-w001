@@ -1,6 +1,10 @@
 #!/bin/sh
 # 首次开机自动启用 WiFi（中国区域合规配置）
 # uci-defaults 机制：执行成功后自动删除，只运行一次
+if uci get wireless.radio0.disabled 2>/dev/null | grep -q "^0$"; then
+    logger -t wifi-setup "WiFi 已由 openstick-tweaks 启用，跳过重复配置"
+    exit 0
+fi
 
 # 等待无线子系统初始化完成
 sleep 2
