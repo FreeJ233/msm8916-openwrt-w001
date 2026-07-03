@@ -13,3 +13,6 @@ src-git smpackage https://github.com/kenzok8/small-package
 
 # iStore 应用商店
 src-git store https://github.com/linkease/istore.git;main
+
+# openstick 设备支持包
+src-git-full openstick https://github.com/lkiuyu/openstick-feeds.git
