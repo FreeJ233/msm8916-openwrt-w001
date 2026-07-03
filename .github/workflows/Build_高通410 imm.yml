@@ -147,6 +147,43 @@ jobs:
         ln -sf /mnt/openwrt $GITHUB_WORKSPACE/openwrt
         echo "✅ 源码克隆完成"
 
+    - name: 🔧 根据用户选择设置内核版本
+      run: |
+        KERNEL="${{ github.event.inputs.kernel }}"
+        MAKEFILE="openwrt/target/linux/msm89xx/Makefile"
+
+        echo "📌 用户选择内核版本: Linux ${KERNEL}"
+        echo "📄 当前 Makefile 中的 KERNEL_PATCHVER:"
+        grep "KERNEL_PATCHVER" "$MAKEFILE"
+
+        # ✅ 核心修复：动态修改 KERNEL_PATCHVER
+        # KERNEL_PATCHVER 是 OpenWrt 构建系统中唯一真正决定内核版本的配置项
+        # .config 文件中的任何配置都无法覆盖此值
+        sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=${KERNEL}/" "$MAKEFILE"
+
+        echo "✅ 修改后的 KERNEL_PATCHVER:"
+        grep "KERNEL_PATCHVER" "$MAKEFILE"
+
+        # 验证修改成功
+        ACTUAL=$(grep "^KERNEL_PATCHVER" "$MAKEFILE" | cut -d= -f2)
+        if [ "$ACTUAL" != "${KERNEL}" ]; then
+          echo "::error::❌ KERNEL_PATCHVER 修改失败！期望: ${KERNEL}，实际: ${ACTUAL}"
+          exit 1
+        fi
+
+        # 验证上游是否存在对应的 config 文件
+        UPSTREAM_CONFIG="openwrt/target/linux/msm89xx/config-${KERNEL}"
+        if [ ! -f "$UPSTREAM_CONFIG" ]; then
+          echo "::error::❌ 上游不存在 config-${KERNEL}，此版本不支持编译！"
+          echo "::error::当前上游支持的内核版本："
+          ls openwrt/target/linux/msm89xx/config-* 2>/dev/null || echo "（无）"
+          exit 1
+        fi
+
+        echo "✅ 上游 config-${KERNEL} 存在，内核版本验证通过"
+        echo "📋 当前上游支持的所有内核版本："
+        ls openwrt/target/linux/msm89xx/config-*   
+
     - name: 📝 加载自定义 feeds 源并执行前置脚本
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default && echo "✅ 已替换 feeds.conf.default"
