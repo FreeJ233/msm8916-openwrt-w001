@@ -1,0 +1,98 @@
+#!/bin/sh /etc/rc.common
+# USB 角色自动切换（自适应 6.12 / 6.18 内核接口）
+
+START=19
+STOP=99
+
+# 根据内核版本和可用节点自动选择接口
+find_role_path() {
+    # 优先尝试 6.18 debugfs 接口
+    if [ -f "/sys/kernel/debug/usb/ci_hdrc.0/role" ]; then
+        echo "debugfs:/sys/kernel/debug/usb/ci_hdrc.0/role"
+        return 0
+    fi
+
+    # 尝试 debugfs 备用路径
+    if [ -f "/sys/kernel/debug/ci_hdrc.0/role" ]; then
+        echo "debugfs:/sys/kernel/debug/ci_hdrc.0/role"
+        return 0
+    fi
+
+    # 6.12 usb_role sysfs 接口
+    for node in /sys/class/usb_role/*/role; do
+        if [ -f "$node" ]; then
+            echo "sysfs:$node"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
+switch_role() {
+    local target="$1"
+    local interface_type="$2"
+    local role_path="$3"
+
+    case "$interface_type" in
+        debugfs)
+            # 6.18 接口，gadget 写法
+            if [ "$target" = "host" ]; then
+                echo "host" > "$role_path"
+            else
+                echo "gadget" > "$role_path"
+            fi
+            ;;
+        sysfs)
+            # 6.12 接口，device 写法
+            if [ "$target" = "host" ]; then
+                echo "host" > "$role_path"
+            else
+                echo "device" > "$role_path"
+            fi
+            ;;
+    esac
+}
+
+start() {
+    KERNEL_VER=$(uname -r | cut -d. -f1,2)
+    logger -t usb-mode "当前内核版本: $KERNEL_VER"
+
+    # 确保 debugfs 已挂载（6.18 需要）
+    mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
+
+    # 查找可用节点
+    ROLE_INFO=$(find_role_path)
+
+    if [ -z "$ROLE_INFO" ]; then
+        logger -t usb-mode "⚠ 未找到 USB role 节点"
+        logger -t usb-mode "  6.12 预期: /sys/class/usb_role/ci_hdrc.0-role-switch/role"
+        logger -t usb-mode "  6.18 预期: /sys/kernel/debug/usb/ci_hdrc.0/role"
+        return 1
+    fi
+
+    INTERFACE_TYPE="${ROLE_INFO%%:*}"
+    ROLE_PATH="${ROLE_INFO#*:}"
+    logger -t usb-mode "接口类型: $INTERFACE_TYPE | 节点: $ROLE_PATH"
+
+    # 先切 host，检测外部设备
+    switch_role "host" "$INTERFACE_TYPE" "$ROLE_PATH"
+    logger -t usb-mode "切换到 host 模式，等待检测外部设备..."
+    sleep 3
+
+    # 检测外部设备数量
+    HOST_DEVICES=$(ls /sys/bus/usb/devices/ 2>/dev/null \
+        | grep -v "^usb" | grep -v "^[0-9]-0" | wc -l)
+
+    if [ "$HOST_DEVICES" -gt "0" ]; then
+        logger -t usb-mode "检测到 $HOST_DEVICES 个外部设备，保持 host 模式"
+    else
+        switch_role "device" "$INTERFACE_TYPE" "$ROLE_PATH"
+        logger -t usb-mode "无外部设备，切换到 gadget/device 模式（Windows RNDIS 就绪）"
+    fi
+}
+
+stop() {
+    logger -t usb-mode "服务停止"
+}
