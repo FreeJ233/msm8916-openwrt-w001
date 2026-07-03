@@ -173,9 +173,12 @@ jobs:
         rm -rf openwrt/feeds/packages/net/{alist,adguardhome,mosdns,xray-core,xray-plugin,v2ray-core,v2ray-geodata,sing-box,smartdns}
         rm -rf openwrt/feeds/packages/utils/v2dat
 
+        # ✅ 修复: 添加容错 fallback，若 1.26 分支不存在则克隆默认分支
+        # 原错误: 直接指定 -b 1.26，分支不存在时整个步骤失败导致所有 go 包无法编译
         echo "🔄 替换 golang 为 kenzok8 维护版本..."
         rm -rf openwrt/feeds/packages/lang/golang
-        git clone https://github.com/kenzok8/golang -b 1.26 openwrt/feeds/packages/lang/golang
+        git clone https://github.com/kenzok8/golang -b 1.26 openwrt/feeds/packages/lang/golang \
+          || git clone https://github.com/kenzok8/golang openwrt/feeds/packages/lang/golang
         echo "✅ 冲突包处理完成"
 
     - name: 📦 安装所有 feeds 软件包
@@ -187,7 +190,19 @@ jobs:
     - name: ⚙️ 加载自定义配置文件并执行后置脚本
       run: |
         [ -e files ] && mv files openwrt/files && echo "✅ 已复制 files/ 目录到源码"
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config && echo "✅ 已加载编译配置: $CONFIG_FILE"
+
+        # ✅ 修复: 原代码配置文件不存在时静默跳过，make defconfig 会生成 x86 默认配置
+        # 导致编译出与 UFI001C 完全无关的 x86 固件
+        # 现改为：文件不存在时强制报错退出，防止静默编译错误架构
+        if [ -e "$CONFIG_FILE" ]; then
+          mv "$CONFIG_FILE" openwrt/.config
+          echo "✅ 已加载编译配置: $CONFIG_FILE"
+        else
+          echo "::error::❌ 配置文件不存在: $CONFIG_FILE"
+          echo "::error::请确认 config/ 目录下存在对应文件，当前支持: config/ufi001c-6.12.config / config/ufi001c-6.18.config"
+          exit 1
+        fi
+
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
@@ -398,11 +413,15 @@ jobs:
           echo "| boot.img | 引导分区镜像（刷入 boot 分区）|"
           echo "| rootfs.img | 系统根文件系统镜像（刷入 system 分区）|"
           echo ""
-          echo "### 🔧 内核差异说明"
-          echo "| 内核 | USB 切换接口 | DEBUG_FS | USB_OTG_FSM |"
-          echo "|------|------------|----------|-------------|"
-          echo "| 6.12 | /sys/class/usb_role/ | ❌ | ❌ |"
-          echo "| 6.18 | /sys/kernel/debug/usb/ | ✅ | ✅ |"
+          # ✅ 修复: 原表格声称 6.18 有 USB_OTG_FSM(✅) 且 USB 路径不同
+          # 经对照上游 config-6.12 和 config-6.18 全文，两个版本均无 CONFIG_USB_OTG_FSM
+          # 两个版本均通过 CONFIG_USB_ROLE_SWITCH + CONFIG_USB_CHIPIDEA_MSM 实现角色切换
+          # USB role 切换接口均为 /sys/class/usb_role/
+          echo "### 🔧 内核差异说明（对照上游 msm89xx target config）"
+          echo "| 内核 | USB 角色切换接口 | PREEMPT 模式 | BBR 加载方式 |"
+          echo "|------|----------------|------------|------------|"
+          echo "| 6.12 | /sys/class/usb_role/ | PREEMPT（完全抢占）| kmod-tcp-bbr 模块 |"
+          echo "| 6.18 | /sys/class/usb_role/ | PREEMPT（完全抢占）| kmod-tcp-bbr 模块 |"
           echo ""
           if [ -n "$EXTRA" ]; then
             echo "### ➕ 本次额外添加的包"
@@ -448,16 +467,22 @@ jobs:
         echo "🔍 查询 Workflow 运行记录..."
         RUNS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
           "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=100")
+
+        # ✅ 修复: 原逻辑错误:
+        # (now - created_at秒数) > cutoff时间戳 → 年龄(如259200秒) vs 时间戳(如1751155200)
+        # 比较永远为 false，旧记录从不删除
+        # 修正为: created_at时间戳 < cutoff时间戳（即创建时间早于截止时间）
         CUTOFF=$(date -d "-${RETAIN_DAYS} days" +%s)
-        DEL_IDS=$(echo "$RUNS" | jq -r --arg cutoff "$CUTOFF" --argjson keep "$KEEP_MINIMUM_RUNS" '
+        DEL_IDS=$(echo "$RUNS" | jq -r --argjson cutoff "$CUTOFF" --argjson keep "$KEEP_MINIMUM_RUNS" '
           [.workflow_runs[]
-            | select((now - (.created_at | fromdateiso8601)) > ($cutoff | tonumber))
+            | select((.created_at | fromdateiso8601) < $cutoff)
             | {id, created_at}
           ]
           | sort_by(.created_at)
           | .[:-$keep]
           | .[].id
         ')
+
         if [[ -z "$DEL_IDS" ]]; then
           echo "✅ 没有需要清理的旧运行记录"
         else
