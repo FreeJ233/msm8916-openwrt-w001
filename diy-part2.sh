@@ -28,12 +28,15 @@ else
     echo "⚠️ 10_system.js 未找到，跳过日期标识注入"
 fi
 
-# -----------------------------------------------------------------
-# 3. TurboAcc 网络加速（在 defconfig 之前执行脚本添加依赖）
-# -----------------------------------------------------------------
+# 3.TurboAcc 加速脚本（含备用源容错）
 echo ">>> 执行 TurboAcc 安装脚本..."
 curl -sSL https://raw.githubusercontent.com/mufeng05/turboacc/main/add_turboacc.sh \
-    -o add_turboacc.sh && bash add_turboacc.sh \
+    -o add_turboacc.sh 2>/dev/null \
+|| curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh \
+    -o add_turboacc.sh 2>/dev/null \
+|| { echo "⚠️ TurboAcc 所有源均失败，跳过"; exit 0; }
+
+bash add_turboacc.sh \
     && echo "✅ TurboAcc 脚本执行完成" \
     || echo "⚠️ TurboAcc 脚本执行失败，跳过"
 
