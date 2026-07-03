@@ -1,48 +1,78 @@
 #!/bin/sh
 # 首次开机自动启用 WiFi（中国区域合规配置）
-# uci-defaults 机制：执行成功后自动删除，只运行一次
-if uci get wireless.radio0.disabled 2>/dev/null | grep -q "^0$"; then
-    logger -t wifi-setup "WiFi 已由 openstick-tweaks 启用，跳过重复配置"
-    exit 0
+# uci-defaults 机制：
+#   exit 0 = 执行成功，系统永久删除此脚本
+#   exit 1 = 执行失败，保留脚本，下次开机重试
+
+# ✅ 修复：移除错误的早退逻辑
+# 原代码：检测到 disabled=0 就 exit 0，导致 SSID/信道/国家码全部跳过
+# 且 uci-defaults exit 0 后脚本被永久删除，配置缺失无法补救
+# 修正：始终完成全部配置，用幂等写入避免重复配置的副作用
+
+# ✅ 修复：移除 sleep 2
+# uci-defaults 在 preinit 阶段执行，此时 init.d 服务（openstick-tweaks）
+# 尚未启动，sleep 2 等待的对象根本还没开始运行，无实际意义
+
+# 检查是否存在无线配置（radio0 必须存在才能继续）
+if ! uci show wireless.radio0 > /dev/null 2>&1; then
+    logger -t wifi-setup "❌ wireless.radio0 不存在，无线子系统未就绪，跳过配置"
+    # 返回 exit 1：保留脚本，下次开机重试
+    exit 1
 fi
 
-# 等待无线子系统初始化完成
-sleep 2
+logger -t wifi-setup "开始配置 WiFi（CN 合规）..."
 
-# 检查是否存在无线配置
-if uci show wireless > /dev/null 2>&1; then
+# 启用 radio0（关闭 disabled 标记）
+uci set wireless.radio0.disabled='0'
 
-    # 关闭 disabled 标记，启用 WiFi
-    uci set wireless.radio0.disabled='0' 2>/dev/null || true
+# ✅ 修复：补充 band='2g'
+# 新版 ImmortalWrt master 要求显式指定 band
+# WCN3620 为 2.4GHz 单频芯片，必须设置为 2g
+uci set wireless.radio0.band='2g'
 
-    # 设置国家码为中国（解锁 1-13 信道，合规使用）
-    uci set wireless.radio0.country='CN' 2>/dev/null || true
+# 设置国家码为中国（解锁 1-13 信道，合规使用）
+uci set wireless.radio0.country='CN'
 
-    # 设置信道 6（中国 2.4GHz 三个无干扰信道之一：1/6/11）
-    uci set wireless.radio0.channel='6' 2>/dev/null || true
+# 设置信道 6（中国 2.4GHz 三个无干扰信道之一：1/6/11）
+uci set wireless.radio0.channel='6'
 
-    # 设置频宽 20MHz（兼容性最好，避免干扰）
-    uci set wireless.radio0.htmode='HT20' 2>/dev/null || true
+# 设置频宽 20MHz（兼容性最好，避免邻频干扰）
+uci set wireless.radio0.htmode='HT20'
 
-    # 获取主机名作为 SSID
-    HOSTNAME=$(uci get system.@system[0].hostname 2>/dev/null || echo "ImmortalWrt")
+# 获取主机名作为 SSID
+HOSTNAME=$(uci get system.@system[0].hostname 2>/dev/null || echo "ImmortalWrt")
 
-    # 配置 AP 接入点
-    uci set wireless.default_radio0=wifi-iface 2>/dev/null || true
-    uci set wireless.default_radio0.device='radio0' 2>/dev/null || true
-    uci set wireless.default_radio0.mode='ap' 2>/dev/null || true
-    uci set wireless.default_radio0.ssid="${HOSTNAME}" 2>/dev/null || true
-    # 开放网络，不设密码
-    uci set wireless.default_radio0.encryption='none' 2>/dev/null || true
-    uci set wireless.default_radio0.network='lan' 2>/dev/null || true
-
-    # 提交并应用
-    uci commit wireless
-    wifi up 2>/dev/null || true
-
-    logger -t wifi-setup "WiFi 已启用 | SSID: ${HOSTNAME} | 信道: 6 | 国家码: CN | 无密码"
+# ✅ 修复：幂等创建 wifi-iface
+# 先检查 default_radio0 是否已存在（openstick-tweaks 可能已创建）
+# 存在则只更新关键字段；不存在则完整创建
+if ! uci show wireless.default_radio0 > /dev/null 2>&1; then
+    logger -t wifi-setup "创建新的 wifi-iface: default_radio0"
+    uci set wireless.default_radio0=wifi-iface
+    uci set wireless.default_radio0.device='radio0'
+    uci set wireless.default_radio0.mode='ap'
+    uci set wireless.default_radio0.network='lan'
 else
-    logger -t wifi-setup "未找到无线配置，跳过"
+    logger -t wifi-setup "wifi-iface 已存在，仅更新 SSID 和加密配置"
 fi
 
+# 无论是否新建，均写入 SSID 和加密配置（确保符合预期）
+uci set wireless.default_radio0.ssid="${HOSTNAME}"
+uci set wireless.default_radio0.encryption='none'
+
+# 提交 UCI 配置
+if ! uci commit wireless; then
+    logger -t wifi-setup "❌ uci commit wireless 失败"
+    exit 1
+fi
+
+# ✅ 修复：wifi up → wifi reload
+# wifi up：仅在 WiFi 未运行时启动，若已运行则什么都不做
+# wifi reload：重载配置并应用，确保 commit 的内容实际生效
+# 此处两者都调用：先确保启动，再确保配置生效
+wifi up 2>/dev/null || true
+wifi reload 2>/dev/null || true
+
+logger -t wifi-setup "✅ WiFi 配置完成 | SSID: ${HOSTNAME} | 信道: 6 | 频段: 2.4GHz | 国家码: CN | 无密码"
+
+# exit 0：告知 uci-defaults 执行成功，系统将删除此脚本（只运行一次）
 exit 0
