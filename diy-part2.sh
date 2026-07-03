@@ -18,55 +18,48 @@ echo "✅ 默认主题已切换为 argon"
 
 # -----------------------------------------------------------------
 # 2. 添加编译日期标识到 LuCI 状态页
+# ✅ 修复: 原 sed 正则在部分上下文中会造成括号不匹配
+# 改用追加方式，安全注入版本标识字符串，不依赖原有括号结构
 # -----------------------------------------------------------------
 BUILD_DATE=$(date +"%Y.%m.%d")
 STATUS_JS=$(find ./feeds/luci/modules/luci-mod-status/ -type f -name "10_system.js" 2>/dev/null | head -1)
 if [ -n "$STATUS_JS" ]; then
-    sed -i "s/\(luciversion || ''\)/\\1) + (' \/ UFI001C-${BUILD_DATE}')/g" "$STATUS_JS"
-    echo "✅ 编译日期标识已注入: UFI001C-${BUILD_DATE}"
+    # 幂等写入：避免多次执行重复注入
+    if ! grep -q "UFI001C-${BUILD_DATE}" "$STATUS_JS"; then
+        sed -i "s/\(luciversion\s*||\s*''\)/\1 + ' \/ UFI001C-${BUILD_DATE}'/g" "$STATUS_JS"
+        echo "✅ 编译日期标识已注入: UFI001C-${BUILD_DATE}"
+    else
+        echo "✅ 编译日期标识已存在，跳过注入"
+    fi
 else
     echo "⚠️ 10_system.js 未找到，跳过日期标识注入"
 fi
 
-# 3.TurboAcc 加速脚本（含备用源容错）
-echo ">>> 执行 TurboAcc 安装脚本..."
-# 检查 curl 命令是否存在
-if ! command -v curl &> /dev/null
-then
-    echo "⚠️ curl 命令不存在，跳过TurboAcc下载"
-else
-    echo "🚀 尝试下载 TurboAcc 安装脚本..."
-    curl -sSL https://raw.githubusercontent.com/mufeng05/turboacc/main/add_turboacc.sh -o add_turboacc.sh 2>/dev/null || \
-    (echo "⚠️ 备用源下载失败，尝试其他源..." && curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o add_turboacc.sh 2>/dev/null) || \
-    { echo "⚠️ TurboAcc 所有源均失败，跳过"; exit 0; }
-
-    if [ -f "add_turboacc.sh" ]; then
-        bash add_turboacc.sh \
-            && echo "✅ TurboAcc 脚本执行完成" \
-            || echo "⚠️ TurboAcc 脚本执行失败，跳过"
-    else
-        echo "⚠️ add_turboacc.sh 文件未成功下载，跳过执行"
-    fi
-fi
+# -----------------------------------------------------------------
+# ✅ 修复: 第3节 TurboAcc 已移除
+# 原因: TurboAcc 安装由 Workflow 中用户选择 luci-app-turboacc 时触发
+# 此处无条件执行会与 Workflow 的额外包步骤重复，造成冲突
+# 如需 TurboAcc，请在触发编译时的"额外包"输入框中填写 luci-app-turboacc
+# -----------------------------------------------------------------
 
 # -----------------------------------------------------------------
 # 4. BBR 设为系统默认拥塞控制算法
-# ✅ 修正：if/else 两个分支都确保写入 fq 和 bbr 两条配置
+# ✅ 内核模块通过 kmod-tcp-bbr 包加载，此处仅设置 sysctl 运行时参数
 # -----------------------------------------------------------------
 SYSCTL_FILE="package/base-files/files/etc/sysctl.conf"
 mkdir -p package/base-files/files/etc
 
 if [ -f "$SYSCTL_FILE" ]; then
-    # 文件已存在，幂等写入（避免重复）
     grep -q 'tcp_congestion_control' "$SYSCTL_FILE" || \
         echo "net.ipv4.tcp_congestion_control=bbr" >> "$SYSCTL_FILE"
     grep -q 'default_qdisc' "$SYSCTL_FILE" || \
         echo "net.core.default_qdisc=fq" >> "$SYSCTL_FILE"
     echo "✅ BBR + fq 已写入已有 sysctl.conf"
 else
-    # 文件不存在，创建并写入
-    echo "net.ipv4.tcp_congestion_control=bbr" >> "$SYSCTL_FILE"
-    echo "net.core.default_qdisc=fq" >> "$SYSCTL_FILE"
+    {
+        echo "net.ipv4.tcp_congestion_control=bbr"
+        echo "net.core.default_qdisc=fq"
+    } >> "$SYSCTL_FILE"
     echo "✅ sysctl.conf 已创建并写入 BBR + fq 配置"
 fi
 
