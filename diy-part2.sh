@@ -22,7 +22,7 @@ echo "✅ 默认主题已切换为 argon"
 BUILD_DATE=$(date +"%Y.%m.%d")
 STATUS_JS=$(find ./feeds/luci/modules/luci-mod-status/ -type f -name "10_system.js" 2>/dev/null | head -1)
 if [ -n "$STATUS_JS" ]; then
-    sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ UFI001C-${BUILD_DATE}')/g" "$STATUS_JS"
+    sed -i "s/\(luciversion || ''\)/\\1) + (' \/ UFI001C-${BUILD_DATE}')/g" "$STATUS_JS"
     echo "✅ 编译日期标识已注入: UFI001C-${BUILD_DATE}"
 else
     echo "⚠️ 10_system.js 未找到，跳过日期标识注入"
@@ -30,15 +30,24 @@ fi
 
 # 3.TurboAcc 加速脚本（含备用源容错）
 echo ">>> 执行 TurboAcc 安装脚本..."
-curl -sSL https://raw.githubusercontent.com/mufeng05/turboacc/main/add_turboacc.sh \
-    -o add_turboacc.sh 2>/dev/null \
-|| curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh \
-    -o add_turboacc.sh 2>/dev/null \
-|| { echo "⚠️ TurboAcc 所有源均失败，跳过"; exit 0; }
+# 检查 curl 命令是否存在
+if ! command -v curl &> /dev/null
+then
+    echo "⚠️ curl 命令不存在，跳过TurboAcc下载"
+else
+    echo "🚀 尝试下载 TurboAcc 安装脚本..."
+    curl -sSL https://raw.githubusercontent.com/mufeng05/turboacc/main/add_turboacc.sh -o add_turboacc.sh 2>/dev/null || \
+    (echo "⚠️ 备用源下载失败，尝试其他源..." && curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o add_turboacc.sh 2>/dev/null) || \
+    { echo "⚠️ TurboAcc 所有源均失败，跳过"; exit 0; }
 
-bash add_turboacc.sh \
-    && echo "✅ TurboAcc 脚本执行完成" \
-    || echo "⚠️ TurboAcc 脚本执行失败，跳过"
+    if [ -f "add_turboacc.sh" ]; then
+        bash add_turboacc.sh \
+            && echo "✅ TurboAcc 脚本执行完成" \
+            || echo "⚠️ TurboAcc 脚本执行失败，跳过"
+    else
+        echo "⚠️ add_turboacc.sh 文件未成功下载，跳过执行"
+    fi
+fi
 
 # -----------------------------------------------------------------
 # 4. BBR 设为系统默认拥塞控制算法
@@ -132,7 +141,7 @@ else
         echo "  ✓ Brand margin 居中"
 
         # 删除登录页图标样式
-        sed -i '/^\.login-page \.login-container \.login-form \.brand \.icon {/,/^}/d' \
+        sed -i '/^.login-page .login-container .login-form .brand .icon {/,/^}/d' \
             "${ARGON_CSS}"
         echo "  ✓ 登录页图标样式已删除"
 
