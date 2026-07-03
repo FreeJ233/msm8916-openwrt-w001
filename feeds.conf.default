@@ -1,0 +1,15 @@
+# =============================================
+# ImmortalWrt 官方 feeds（保持与上游一致）
+# =============================================
+src-git packages https://github.com/immortalwrt/packages.git
+src-git luci https://github.com/immortalwrt/luci.git
+src-git routing https://github.com/openwrt/routing.git
+
+# =============================================
+# 第三方扩展源
+# =============================================
+# kenzok8 插件包（包含 openclash/passwall/ssr-plus 等）
+src-git smpackage https://github.com/kenzok8/small-package
+
+# iStore 应用商店
+src-git store https://github.com/linkease/istore.git;main
