@@ -7,7 +7,7 @@ echo "=========================="
 echo -e "\n\033[1;34mCPU信息:\033[0m"
 cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ *//')
 cpu_cores=$(grep -c "^processor" /proc/cpuinfo)
-cpu_threads=$(lscpu 2>/dev/null | grep "CPU(s):" | head -1 | awk '{print $2}' || echo "$cpu_cores")
+cpu_threads=$(lscpu 2>/dev/null | grep "^CPU(s):" | head -1 | awk '{print $2}' || echo "$cpu_cores")
 echo "型号: $cpu_model"
 echo "核心/线程: $cpu_cores/$cpu_threads"
 
@@ -44,12 +44,15 @@ if [ -n "${GITHUB_ACTIONS}" ]; then
     echo "环境: GitHub Actions"
 fi
 
-# 性能测试（可选）
+# 性能测试
+# ✅ 修复: 原代码使用 bc 命令做浮点运算，ubuntu-latest 不保证安装
+# 改用 awk 内置浮点计算，零外部依赖，避免第一步就因 bc 缺失而失败
 echo -e "\n\033[1;34m简单性能测试:\033[0m"
-start_time=$(date +%s.%N)
+start_time=$(date +%s%N)
 for i in {1..1000}; do : ; done
-end_time=$(date +%s.%N)
-echo "空循环测试: $(echo "$end_time - $start_time" | bc) 秒"
+end_time=$(date +%s%N)
+elapsed=$(awk "BEGIN {printf \"%.4f\", ($end_time - $start_time) / 1000000000}")
+echo "空循环测试: ${elapsed} 秒"
 
 echo -e "\n=========================="
 echo "信息收集完成"
