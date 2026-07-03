@@ -1,70 +1,73 @@
 #!/bin/sh /etc/rc.common
-# USB 角色自动切换（6.12/6.18 自适应）
-# 注意：默认 gadget 由 openstick-tweaks 处理
-# 本脚本只负责：检测到外部 USB 设备时切换到 host
+# USB 角色自动切换（适用于 6.12 / 6.18 内核）
+# 依据上游 config-6.12 / config-6.18：
+#   - 两个版本均无 CONFIG_USB_OTG_FSM，debugfs USB 路径不存在
+#   - 两个版本均有 CONFIG_USB_ROLE_SWITCH=y + CONFIG_USB_CHIPIDEA_MSM=y
+#   - 统一使用 /sys/class/usb_role/*/role 的 sysfs 接口
+# 功能：检测到外部 USB 设备时切换到 host 模式
+# 默认 gadget/RNDIS 由 openstick-tweaks 处理，本脚本不干预
 
 START=25
-# ↑ START=25，晚于 openstick-tweaks（推测 START=20）
-# 确保 RNDIS gadget 已建立后再检测外部设备
-
 STOP=99
 
+# ✅ 修复：删除 debugfs 分支（上游两个内核版本均无此路径，永久死代码）
+# 仅保留 sysfs 接口查找，对 6.12 和 6.18 均适用
 find_role_path() {
-    # 6.18 debugfs 接口
-    if [ -f "/sys/kernel/debug/usb/ci_hdrc.0/role" ]; then
-        echo "debugfs:/sys/kernel/debug/usb/ci_hdrc.0/role"
-        return 0
-    fi
-    # 6.12 sysfs 接口
     for node in /sys/class/usb_role/*/role; do
         if [ -f "$node" ]; then
-            echo "sysfs:$node"
+            echo "$node"
             return 0
         fi
     done
     echo ""
 }
 
+# ✅ 修复：轮询等待 role 节点出现，替代 sleep 5 盲等
+# 避免 openstick-tweaks 初始化慢时节点尚未注册就开始检测
+wait_for_role_node() {
+    local max_wait=10
+    local count=0
+    while [ $count -lt $max_wait ]; do
+        if [ -n "$(find_role_path)" ]; then
+            return 0
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+    return 1
+}
+
 start() {
-    # 等待 openstick-tweaks 完成 gadget 初始化
-    sleep 5
-
-    USB_ROLE_PATH=""
-    ROLE_INFO=$(find_role_path)
-
-    if [ -z "$ROLE_INFO" ]; then
-        logger -t usb-mode "⚠ 未找到 role 节点，跳过切换"
+    # 等待 USB role 节点注册完成（最多 10 秒）
+    if ! wait_for_role_node; then
+        logger -t usb-mode "⚠ 等待超时，未找到 /sys/class/usb_role/*/role 节点，跳过切换"
         return 0
     fi
 
-    INTERFACE_TYPE="${ROLE_INFO%%:*}"
-    ROLE_PATH="${ROLE_INFO#*:}"
+    ROLE_PATH=$(find_role_path)
+    logger -t usb-mode "已找到 role 节点: $ROLE_PATH"
 
-    # 检测外部 USB 设备数量
-    # 过滤掉 root hub 和内部设备，只统计真实外部设备
+    # ✅ 修复：改进外部 USB 设备检测逻辑
+    # 只统计 X-X 格式条目（真实物理设备），排除：
+    #   - usbX（root hub）
+    #   - 含 ":" 的条目（接口描述符，如 1-1:1.0）
     HOST_DEVICES=$(ls /sys/bus/usb/devices/ 2>/dev/null \
-        | grep -v "^usb" \
-        | grep -v "\-0:" \
+        | grep -E '^[0-9]+-[0-9]+$' \
         | wc -l)
 
     logger -t usb-mode "检测到外部 USB 设备数: $HOST_DEVICES"
-    logger -t usb-mode "接口类型: $INTERFACE_TYPE | 节点: $ROLE_PATH"
 
     if [ "$HOST_DEVICES" -gt "0" ]; then
-        # 有外部设备 → 切换到 host 模式
-        case "$INTERFACE_TYPE" in
-            debugfs)
-                echo "host" > "$ROLE_PATH" 2>/dev/null
-                ;;
-            sysfs)
-                echo "host" > "$ROLE_PATH" 2>/dev/null
-                ;;
-        esac
-        logger -t usb-mode "✅ 检测到外部设备，已切换到 host 模式"
+        # ✅ 修复：简化切换逻辑，无需 case（两个内核版本接口完全相同）
+        echo "host" > "$ROLE_PATH" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            logger -t usb-mode "✅ 检测到外部设备，已切换到 host 模式"
+        else
+            logger -t usb-mode "❌ host 模式切换失败，节点写入错误: $ROLE_PATH"
+        fi
     else
-        # 无外部设备 → 保持当前 gadget/device 模式（不干预）
         CURRENT=$(cat "$ROLE_PATH" 2>/dev/null || echo "未知")
-        logger -t usb-mode "无外部设备，保持当前模式: $CURRENT（不干预 RNDIS）"
+        logger -t usb-mode "无外部设备，保持当前模式: $CURRENT（不干预 RNDIS gadget）"
     fi
 }
 
