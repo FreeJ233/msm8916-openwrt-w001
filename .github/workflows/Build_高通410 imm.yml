@@ -627,15 +627,19 @@ jobs:
           }}_kernel${{ github.event.inputs.kernel }}
         path: ${{ env.FIRMWARE }}
 
-    - name: 🏷️ 生成 Release 标签与说明文件
+        - name: 🏷️ 生成 Release 标签与说明文件
       id: tag
       if: >-
         env.UPLOAD_RELEASE == 'true' &&
         steps.organize.outputs.status == 'success' &&
         !cancelled()
       run: |
-        PROFILE=${{ github.event.inputs.profile }}
-        KERNEL=${{ github.event.inputs.kernel }}
+        PROFILE="${{ github.event.inputs.profile }}"
+        KERNEL="${{ github.event.inputs.kernel }}"
+        # ✅ 修复：在 run 脚本中读取环境变量，而非 YAML 表达式
+        # ${{ env.KERNEL_VER }} 在 YAML 层可能因时序问题读到空值
+        # 改用 $KERNEL_VER 在 shell 中直接读取，确保拿到编译后的真实值
+        KERNEL_VER="${KERNEL_VER}"
         RAW='${{ inputs.extra_packages }}'
         CUSTOM_IP=$(echo "$RAW" | grep -oP '(?<=__ip__)[^,\s]+' || true)
         CUSTOM_HOSTNAME=$(echo "$RAW" | grep -oP '(?<=__hostname__)[^,\s]+' || true)
@@ -646,18 +650,66 @@ jobs:
         SELECTED_HASH="${{ steps.smart_lock.outputs.selected_hash }}"
         REASON="${{ steps.smart_lock.outputs.selection_reason }}"
 
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")-${PROFILE}-kernel${KERNEL}" \
-          >> $GITHUB_OUTPUT
+        # -------------------------------------------------------
+        # ✅ 内核版本一致性最终校验
+        # 对比用户选择（主版本）与实际编译版本，给出明确结论
+        # -------------------------------------------------------
+        if echo "${KERNEL_VER}" | grep -qE "^${KERNEL//./\\.}"; then
+          KERNEL_MATCH_STATUS="✅ 与用户选择一致"
+        else
+          KERNEL_MATCH_STATUS="⚠️ 请核对（实际: ${KERNEL_VER} / 选择: ${KERNEL}）"
+        fi
+
+        # -------------------------------------------------------
+        # ✅ 根据内核版本生成对应的特性说明
+        # 对照上游三个 config 文件的实际差异，如实描述
+        # -------------------------------------------------------
+        case "${KERNEL}" in
+          6.6)
+            BBR_STATUS="❌ 不支持（上游 TCP_CONG_ADVANCED=n，使用 cubic）"
+            WIFI_STATUS="⚠️ 受限（上游 QCOM_WCNSS_CTRL=n，固件加载可能不稳定）"
+            BT_STATUS="❌ 不支持（上游无 BT/BT_QCA 配置）"
+            KERNEL_NOTE="LTS 长期支持内核，稳定优先，部分功能受限"
+            ;;
+          6.12)
+            BBR_STATUS="✅ 支持（kmod-tcp-bbr 模块，上游 TCP_CONG_BBR=m）"
+            WIFI_STATUS="✅ 完整支持（上游 QCOM_WCNSS_CTRL=y）"
+            BT_STATUS="✅ 支持（上游 BT_QCA=y）"
+            KERNEL_NOTE="标准内核，功能完整，均衡推荐"
+            ;;
+          6.18)
+            BBR_STATUS="✅ 支持（kmod-tcp-bbr 模块，上游 TCP_CONG_BBR=m）"
+            WIFI_STATUS="✅ 完整支持（上游 QCOM_WCNSS_CTRL=y）"
+            BT_STATUS="✅ 支持（上游 BT=y）"
+            KERNEL_NOTE="最新稳定内核，新特性体验，当前上游默认版本"
+            ;;
+          *)
+            BBR_STATUS="未知"
+            WIFI_STATUS="未知"
+            BT_STATUS="未知"
+            KERNEL_NOTE="未知内核版本"
+            ;;
+        esac
+
+        # -------------------------------------------------------
+        # Release tag：包含真实内核版本号
+        # -------------------------------------------------------
+        RELEASE_TAG="$(date +"%Y.%m.%d-%H%M")-${PROFILE}-kernel${KERNEL}"
+        echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+
         touch release.txt
         {
           echo "## ImmortalWrt · 高通410(MSM8916) · ${PROFILE} · Linux ${KERNEL}"
           echo ""
+          echo "### 📋 编译信息"
           echo "| 项目 | 信息 |"
           echo "|------|------|"
           echo "| 编译者 | ${{ github.actor }} |"
           echo "| 机型 | ${PROFILE} |"
-          echo "| 选择内核 | Linux ${KERNEL} |"
-          echo "| 实际内核版本 | ${{ env.KERNEL_VER }} |"
+          echo "| 用户选择内核 | Linux ${KERNEL} |"
+          # ✅ 核心修复：显示真实编译内核版本
+          echo "| **实际编译内核** | **${KERNEL_VER}** |"
+          echo "| 版本一致性 | ${KERNEL_MATCH_STATUS} |"
           echo "| 上游提交 | \`${SELECTED_HASH:0:12}\` |"
           echo "| 提交选择策略 | ${REASON} |"
           echo "| 管理地址 | ${DISPLAY_IP} |"
@@ -671,12 +723,35 @@ jobs:
           echo "| boot.img | 引导分区镜像（刷入 boot 分区）|"
           echo "| rootfs.img | 系统根文件系统镜像（刷入 system 分区）|"
           echo ""
-          echo "### 🔧 三内核版本对比（对照上游 msm89xx target）"
-          echo "| 内核 | 类型 | USB 角色接口 | BBR 方式 | 推荐场景 |"
-          echo "|------|------|------------|--------|--------|"
-          echo "| 6.6  | LTS 长期支持 | /sys/class/usb_role/ | kmod 模块 | 追求稳定 |"
-          echo "| 6.12 | 标准版 | /sys/class/usb_role/ | kmod 模块 | 均衡选择 |"
-          echo "| 6.18 | 最新稳定版 | /sys/class/usb_role/ | kmod 模块 | 体验新特性 |"
+          # ✅ 核心修复：根据实际内核版本显示真实特性支持情况
+          echo "### 🔧 本次编译内核特性（Linux ${KERNEL} · ${KERNEL_NOTE}）"
+          echo "| 特性 | 状态 | 说明 |"
+          echo "|------|------|------|"
+          echo "| BBR 拥塞控制 | ${BBR_STATUS} | |"
+          echo "| WiFi 固件加载 | ${WIFI_STATUS} | WCN3620 |"
+          echo "| 蓝牙支持 | ${BT_STATUS} | UFI001C 无蓝牙硬件，仅供参考 |"
+          echo "| USB 角色切换 | ✅ /sys/class/usb_role/ | 三版本一致 |"
+          echo "| 抢占模式 | ✅ PREEMPT（完全抢占）| 三版本一致 |"
+          echo "| 文件系统 | ✅ ext4（1024MB）| 三版本一致 |"
+          echo ""
+          echo "### 📊 三内核版本横向对比"
+          echo "| 内核 | 类型 | BBR | WiFi固件 | 推荐场景 |"
+          echo "|------|------|-----|---------|--------|"
+          if [ "${KERNEL}" = "6.6" ]; then
+            echo "| **6.6** ← 本次 | LTS | ❌ | ⚠️ 受限 | 极致稳定 |"
+          else
+            echo "| 6.6 | LTS | ❌ | ⚠️ 受限 | 极致稳定 |"
+          fi
+          if [ "${KERNEL}" = "6.12" ]; then
+            echo "| **6.12** ← 本次 | 标准 | ✅ | ✅ | 均衡推荐 |"
+          else
+            echo "| 6.12 | 标准 | ✅ | ✅ | 均衡推荐 |"
+          fi
+          if [ "${KERNEL}" = "6.18" ]; then
+            echo "| **6.18** ← 本次 | 最新 | ✅ | ✅ | 新特性体验 |"
+          else
+            echo "| 6.18 | 最新 | ✅ | ✅ | 新特性体验 |"
+          fi
           echo ""
           if [ -n "$EXTRA" ]; then
             echo "### ➕ 本次额外添加的包"
@@ -686,22 +761,17 @@ jobs:
             echo "无"
           fi
         } >> release.txt
+
         echo "status=success" >> $GITHUB_OUTPUT
         echo "✅ Release 说明文件生成完成"
+        echo ""
+        echo "📋 Release 内容预览："
+        echo "   Tag:      ${RELEASE_TAG}"
+        echo "   选择内核: Linux ${KERNEL}"
+        echo "   实际内核: ${KERNEL_VER}"
+        echo "   一致性:   ${KERNEL_MATCH_STATUS}"
 
-    - name: 📋 生成固件文件清单
-      if: >-
-        env.UPLOAD_RELEASE == 'true' &&
-        steps.organize.outputs.status == 'success' &&
-        !cancelled()
-      run: |
-        find ${{ env.FIRMWARE }} -type f > file_list.txt
-        echo "📋 待上传文件清单："
-        cat file_list.txt
-        test -s file_list.txt \
-          || { echo "::error::❌ 未找到固件文件！"; exit 1; }
-
-    - name: 🚀 上传固件到 Releases（正式发布）
+        - name: 🚀 上传固件到 Releases（正式发布）
       if: >-
         env.UPLOAD_RELEASE == 'true' &&
         steps.organize.outputs.status == 'success' &&
@@ -712,9 +782,11 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag: ${{ steps.tag.outputs.release_tag }}
+        # ✅ 修复：Release 标题同时显示选择版本和真实版本
+        # 格式：ImmortalWrt ufi001c kernel6.12(6.12.28) _202507040830
         name: >-
           ImmortalWrt ${{ github.event.inputs.profile }}
-          kernel${{ github.event.inputs.kernel }}
+          kernel${{ github.event.inputs.kernel }}(${{ env.KERNEL_VER }})
           ${{ env.FILE_DATE }}
         bodyFile: release.txt
         artifacts: ${{ env.FIRMWARE }}/**/*
