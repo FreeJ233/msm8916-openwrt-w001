@@ -60,38 +60,5 @@ else
     echo "  ✓ 背景图 bg1.jpg 已替换"
 fi
 
-# -----------------------------------------------------------------
-# 5. 设置 LuCI 默认语言为简体中文（加强版）
-#    通过 uci-defaults 脚本在首次开机时强制写入
-#    比预置 /etc/config/luci 更可靠（不会被 base-files 覆盖）
-# -----------------------------------------------------------------
-echo ""
-echo ">>> 设置 LuCI 默认简体中文..."
-
-mkdir -p package/base-files/files/etc/uci-defaults
-
-cat > package/base-files/files/etc/uci-defaults/99-default-settings << 'EOF'
-#!/bin/sh
-# 首次开机自动执行：设置 LuCI 默认语言、主题
-
-# 若 luci 配置文件不存在则创建
-[ -f /etc/config/luci ] || touch /etc/config/luci
-
-uci -q batch <<-UCIEOF || true
-	delete luci.main
-	set luci.main=core
-	set luci.main.lang=zh_Hans
-	set luci.main.mediaurlbase=/luci-static/argon
-	set luci.main.resourcebase=/luci-static/resources
-	set luci.main.ubuspath=/ubus/
-	commit luci
-UCIEOF
-
-exit 0
-EOF
-
-chmod +x package/base-files/files/etc/uci-defaults/99-default-settings
-echo "  ✓ uci-defaults/99-default-settings 已写入"
-
 echo ""
 echo "✅ diy-part2.sh 全部执行完成"
