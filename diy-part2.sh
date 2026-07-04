@@ -43,25 +43,30 @@ fi
 # -----------------------------------------------------------------
 
 # -----------------------------------------------------------------
-# 4. BBR 设为系统默认拥塞控制算法
-# ✅ 内核模块通过 kmod-tcp-bbr 包加载，此处仅设置 sysctl 运行时参数
+# 4. BBR 配置（内核版本自适应）
+# ✅ 对照上游：
+#   6.6:  TCP_CONG_ADVANCED=n → BBR 不可用，写入 sysctl 但运行时会回退 cubic
+#   6.12: TCP_CONG_BBR=m      → BBR 可用，kmod-tcp-bbr 加载后生效
+#   6.18: TCP_CONG_BBR=m      → BBR 可用，kmod-tcp-bbr 加载后生效
 # -----------------------------------------------------------------
 SYSCTL_FILE="package/base-files/files/etc/sysctl.conf"
 mkdir -p package/base-files/files/etc
 
+# fq 队列调度器三个版本均支持，无条件写入
 if [ -f "$SYSCTL_FILE" ]; then
-    grep -q 'tcp_congestion_control' "$SYSCTL_FILE" || \
-        echo "net.ipv4.tcp_congestion_control=bbr" >> "$SYSCTL_FILE"
     grep -q 'default_qdisc' "$SYSCTL_FILE" || \
         echo "net.core.default_qdisc=fq" >> "$SYSCTL_FILE"
+    grep -q 'tcp_congestion_control' "$SYSCTL_FILE" || \
+        echo "net.ipv4.tcp_congestion_control=bbr" >> "$SYSCTL_FILE"
     echo "✅ BBR + fq 已写入已有 sysctl.conf"
 else
     {
-        echo "net.ipv4.tcp_congestion_control=bbr"
         echo "net.core.default_qdisc=fq"
+        echo "net.ipv4.tcp_congestion_control=bbr"
     } >> "$SYSCTL_FILE"
-    echo "✅ sysctl.conf 已创建并写入 BBR + fq 配置"
+    echo "✅ sysctl.conf 已创建并写入 fq + BBR 配置"
 fi
+echo "ℹ️ 注意：Linux 6.6 内核 TCP_CONG_ADVANCED=n，BBR sysctl 在 6.6 上运行时会回退到 cubic"
 
 # -----------------------------------------------------------------
 # 5. Argon 主题美化
