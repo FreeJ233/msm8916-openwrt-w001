@@ -20,8 +20,8 @@ on:
         description: ' ↓ 选择内核版本（自动匹配上游支持的提交）↓ '
         type: choice
         options:
-          - 6.18
           - 6.12
+          - 6.18
           - 6.6
         default: 6.18
         required: true
@@ -131,7 +131,6 @@ jobs:
         echo "🎯 目标内核版本: Linux ${KERNEL}"
         echo "=================================================="
 
-        # 优先级 1：用户手动指定 hash
         if [ -n "$CUSTOM_HASH" ]; then
           echo "🔑 优先级1：使用用户手动指定的 hash: $CUSTOM_HASH"
           echo "selected_hash=$CUSTOM_HASH" >> $GITHUB_OUTPUT
@@ -139,7 +138,6 @@ jobs:
           exit 0
         fi
 
-        # 优先级 2：upstream_lock.txt（支持注释行）
         if [ -f "$LOCK_FILE" ]; then
           LOCKED_HASH=$(grep -v '^#' "$LOCK_FILE" | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')
           if [ -n "$LOCKED_HASH" ]; then
@@ -150,7 +148,6 @@ jobs:
           fi
         fi
 
-        # 优先级 3：自动从 git 历史智能查找
         echo "🤖 优先级3：自动智能查找支持 Linux ${KERNEL} 的最新上游提交..."
         git clone --depth=200 --no-checkout --filter=blob:none ${{ env.REPO_URL }} upstream_search
         cd upstream_search
@@ -227,7 +224,6 @@ jobs:
         echo "🔧 内核版本设置与验证"
         echo "=================================================="
 
-        # 验证1：用户 config 文件
         echo "📋 验证1：用户编译配置文件"
         if [ ! -f "${GITHUB_WORKSPACE}/${USER_CONFIG}" ]; then
           echo "::error::❌ 用户 config 不存在: ${USER_CONFIG}"
@@ -236,7 +232,6 @@ jobs:
         fi
         echo "  ✅ ${USER_CONFIG} 存在"
 
-        # 验证2：上游 config 文件
         echo "📋 验证2：上游内核配置文件"
         ls openwrt/target/linux/msm89xx/config-* 2>/dev/null | while read f; do
           VER=$(basename "$f" | sed 's/config-//')
@@ -252,13 +247,11 @@ jobs:
         fi
         echo "  ✅ 上游 config-${KERNEL} 存在"
 
-        # 核心：修改 KERNEL_PATCHVER
         echo "📋 修改 KERNEL_PATCHVER:"
         echo "  修改前: $(grep 'KERNEL_PATCHVER' $MAKEFILE)"
         sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=${KERNEL}/" "$MAKEFILE"
         echo "  修改后: $(grep 'KERNEL_PATCHVER' $MAKEFILE)"
 
-        # 验证3：写入确认
         echo "📋 验证3：KERNEL_PATCHVER 写入确认"
         ACTUAL=$(grep "^KERNEL_PATCHVER" "$MAKEFILE" | cut -d= -f2 | tr -d '[:space:]')
         if [ "$ACTUAL" != "${KERNEL}" ]; then
@@ -288,14 +281,12 @@ jobs:
     - name: 🗑️ 删除 smpackage 与官方 feeds 中的冲突包
       run: |
         echo "🗑️ 删除 smpackage 自身携带的系统基础包..."
-        # ✅ 修复错误3：不使用反斜杠续行，改为单行避免缩进空格混入包名
         rm -rf openwrt/feeds/smpackage/base-files openwrt/feeds/smpackage/dnsmasq openwrt/feeds/smpackage/firewall* openwrt/feeds/smpackage/fullconenat openwrt/feeds/smpackage/libnftnl openwrt/feeds/smpackage/nftables openwrt/feeds/smpackage/ppp openwrt/feeds/smpackage/opkg openwrt/feeds/smpackage/ucl openwrt/feeds/smpackage/upx openwrt/feeds/smpackage/vsftpd* openwrt/feeds/smpackage/miniupnpd-iptables openwrt/feeds/smpackage/wireless-regdb
 
         echo "🗑️ 删除 luci feed 中与 smpackage 冲突的包..."
         rm -rf openwrt/feeds/luci/applications/luci-app-mosdns
 
         echo "🗑️ 删除 packages feed 中与 smpackage 冲突的包..."
-        # ✅ 修复错误4：同样改为单行
         rm -rf openwrt/feeds/packages/net/alist openwrt/feeds/packages/net/adguardhome openwrt/feeds/packages/net/mosdns openwrt/feeds/packages/net/xray-core openwrt/feeds/packages/net/xray-plugin openwrt/feeds/packages/net/v2ray-core openwrt/feeds/packages/net/v2ray-geodata openwrt/feeds/packages/net/sing-box openwrt/feeds/packages/net/smartdns
         rm -rf openwrt/feeds/packages/utils/v2dat
 
@@ -337,7 +328,6 @@ jobs:
 
         if [ -n "$CUSTOM_HOSTNAME" ]; then
           echo "🏷️ 设置主机名: $CUSTOM_HOSTNAME"
-          # ✅ 修复错误5：sed 表达式不跨行，避免缩进空格混入正则
           sed -i "s/set system\.@system\[0\]\.hostname='ImmortalWrt'/set system.@system[0].hostname='$CUSTOM_HOSTNAME'/" package/base-files/files/bin/config_generate || true
           sed -i "s/option hostname 'ImmortalWrt'/option hostname '$CUSTOM_HOSTNAME'/" package/base-files/files/etc/config/system 2>/dev/null || true
         fi
@@ -417,15 +407,12 @@ jobs:
         echo "🔍 多路径探测真实内核版本..."
         KERNEL_VER=""
 
-        # 方法1：.kernelversion 文件（最权威）
-        # ✅ 修复错误6：用 find 替代 glob，避免路径匹配失败
         KVER_FILE=$(find /mnt/openwrt/build_dir/ -maxdepth 4 -name ".kernelversion" 2>/dev/null | head -1)
         if [ -n "$KVER_FILE" ] && [ -f "$KVER_FILE" ]; then
           KERNEL_VER=$(cat "$KVER_FILE" | tr -d '[:space:]')
           echo "✅ 方法1成功：$KVER_FILE → ${KERNEL_VER}"
         fi
 
-        # 方法2：编译目录名（格式 linux-X.XX.XX）
         if [ -z "$KERNEL_VER" ]; then
           KDIR=$(find /mnt/openwrt/build_dir/ -maxdepth 4 -mindepth 3 -type d -name "linux-[0-9]*" 2>/dev/null | head -1)
           if [ -n "$KDIR" ]; then
@@ -434,7 +421,6 @@ jobs:
           fi
         fi
 
-        # 方法3：manifest 文件
         if [ -z "$KERNEL_VER" ]; then
           KERNEL_VER=$(find /mnt/openwrt/bin/targets/ -name "*.manifest" 2>/dev/null | head -1 | xargs grep -m1 "^kernel" 2>/dev/null | awk '{print $2}' || echo "")
           if [ -n "$KERNEL_VER" ]; then
@@ -442,11 +428,9 @@ jobs:
           fi
         fi
 
-        # 方法4：兜底
         if [ -z "$KERNEL_VER" ]; then
           KERNEL_VER="${{ github.event.inputs.kernel }}.x（探测失败）"
           echo "⚠️ 方法1-3均失败，使用兜底值"
-          echo "编译目录结构："
           find /mnt/openwrt/build_dir/ -maxdepth 4 -type d 2>/dev/null | head -20 || true
         fi
 
@@ -524,9 +508,8 @@ jobs:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}_kernel${{ github.event.inputs.kernel }}
         path: ${{ env.FIRMWARE }}
 
-    # ✅ 修复错误1：- name 前恢复为4个空格（原来是8个导致YAML解析失败）
-    - name: 🏷️ 生成 Release 标签与说明文件
-      id: tag
+    - name: 📦 打包 Release 上传文件（固件 + 配置各一个 zip）
+      id: pack_release
       if: >-
         env.UPLOAD_RELEASE == 'true' &&
         steps.organize.outputs.status == 'success' &&
@@ -534,16 +517,53 @@ jobs:
       run: |
         PROFILE="${{ github.event.inputs.profile }}"
         KERNEL="${{ github.event.inputs.kernel }}"
-        # ✅ shell 层读取 KERNEL_VER，避免 YAML 表达式时序问题
+        FILE_DATE_CLEAN=$(echo "${FILE_DATE}" | sed 's/^_//')
+
+        RELEASE_DIR="${GITHUB_WORKSPACE}/release_upload"
+        mkdir -p "$RELEASE_DIR"
+
+        FIRMWARE_ZIP="OpenWrt_firmware_openstick-${PROFILE}_${FILE_DATE_CLEAN}_kernel${KERNEL}.zip"
+        CONFIG_ZIP="build-config-${PROFILE}-kernel${KERNEL}.zip"
+
+        echo "📦 打包固件包: ${FIRMWARE_ZIP}"
+        cd "${FIRMWARE}"
+        zip -r "${RELEASE_DIR}/${FIRMWARE_ZIP}" ./*
+        cd -
+
+        echo "📦 打包配置包: ${CONFIG_ZIP}"
+        CONFIG_TMP=$(mktemp -d)
+        cp "${GITHUB_WORKSPACE}/openwrt/.config" "${CONFIG_TMP}/.config" 2>/dev/null || true
+        cp "${GITHUB_WORKSPACE}/openwrt/feeds.conf.default" "${CONFIG_TMP}/feeds.conf.default" 2>/dev/null || true
+        cp "${GITHUB_WORKSPACE}/openwrt/target/linux/msm89xx/Makefile" "${CONFIG_TMP}/Makefile" 2>/dev/null || true
+        cd "${CONFIG_TMP}"
+        zip -r "${RELEASE_DIR}/${CONFIG_ZIP}" ./*
+        cd -
+
+        echo "✅ Release 打包完成："
+        ls -lh "${RELEASE_DIR}"
+
+        echo "RELEASE_DIR=${RELEASE_DIR}" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: 🏷️ 生成 Release 标签与说明文件
+      id: tag
+      if: >-
+        env.UPLOAD_RELEASE == 'true' &&
+        steps.organize.outputs.status == 'success' &&
+        steps.pack_release.outputs.status == 'success' &&
+        !cancelled()
+      run: |
+        PROFILE="${{ github.event.inputs.profile }}"
+        KERNEL="${{ github.event.inputs.kernel }}"
         KERNEL_VER="${KERNEL_VER}"
+        SELECTED_HASH="${{ steps.smart_lock.outputs.selected_hash }}"
+        REASON="${{ steps.smart_lock.outputs.selection_reason }}"
+
         RAW='${{ inputs.extra_packages }}'
         CUSTOM_IP=$(echo "$RAW" | grep -oP '(?<=__ip__)[^,\s]+' || true)
         CUSTOM_HOSTNAME=$(echo "$RAW" | grep -oP '(?<=__hostname__)[^,\s]+' || true)
         DISPLAY_IP=${CUSTOM_IP:-192.168.2.1}
         DISPLAY_HOSTNAME=${CUSTOM_HOSTNAME:-ImmortalWrt}
-        EXTRA=$(echo "$RAW" | sed 's/,/ /g' | tr ' ' '\n' | grep -v '^__ip__' | grep -v '^__hostname__' | sed '/^$/d')
-        SELECTED_HASH="${{ steps.smart_lock.outputs.selected_hash }}"
-        REASON="${{ steps.smart_lock.outputs.selection_reason }}"
 
         # 版本一致性校验
         if echo "${KERNEL_VER}" | grep -qE "^${KERNEL//./\\.}"; then
@@ -552,42 +572,14 @@ jobs:
           KERNEL_MATCH_STATUS="⚠️ 请核对（实际: ${KERNEL_VER} / 选择: ${KERNEL}）"
         fi
 
-        # 根据内核版本生成特性说明
-        case "${KERNEL}" in
-          6.6)
-            BBR_STATUS="❌ 不支持（上游 TCP_CONG_ADVANCED=n，使用 cubic）"
-            WIFI_STATUS="⚠️ 受限（上游 QCOM_WCNSS_CTRL=n）"
-            BT_STATUS="❌ 不支持（上游无 BT/BT_QCA）"
-            KERNEL_NOTE="LTS 长期支持内核，稳定优先，部分功能受限"
-            ;;
-          6.12)
-            BBR_STATUS="✅ 支持（kmod-tcp-bbr，上游 TCP_CONG_BBR=m）"
-            WIFI_STATUS="✅ 完整支持（上游 QCOM_WCNSS_CTRL=y）"
-            BT_STATUS="✅ 支持（上游 BT_QCA=y）"
-            KERNEL_NOTE="标准内核，功能完整，均衡推荐"
-            ;;
-          6.18)
-            BBR_STATUS="✅ 支持（kmod-tcp-bbr，上游 TCP_CONG_BBR=m）"
-            WIFI_STATUS="✅ 完整支持（上游 QCOM_WCNSS_CTRL=y）"
-            BT_STATUS="✅ 支持（上游 BT=y）"
-            KERNEL_NOTE="最新稳定内核，当前上游默认版本"
-            ;;
-          *)
-            BBR_STATUS="未知"
-            WIFI_STATUS="未知"
-            BT_STATUS="未知"
-            KERNEL_NOTE="未知内核版本"
-            ;;
-        esac
-
         RELEASE_TAG="$(date +"%Y.%m.%d-%H%M")-${PROFILE}-kernel${KERNEL}"
         echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
 
+        # 仅保留"编译信息"表格
         touch release.txt
         {
-          echo "## ImmortalWrt · 高通410(MSM8916) · ${PROFILE} · Linux ${KERNEL}"
+          echo "## 📋 编译信息"
           echo ""
-          echo "### 📋 编译信息"
           echo "| 项目 | 信息 |"
           echo "|------|------|"
           echo "| 编译者 | ${{ github.actor }} |"
@@ -601,60 +593,16 @@ jobs:
           echo "| 主机名 | ${DISPLAY_HOSTNAME} |"
           echo "| 默认用户 | root |"
           echo "| 默认密码 | 空（无密码）|"
-          echo ""
-          echo "### 📦 固件文件说明"
-          echo "| 文件名 | 用途 |"
-          echo "|--------|------|"
-          echo "| boot.img | 引导分区镜像（刷入 boot 分区）|"
-          echo "| rootfs.img | 系统根文件系统镜像（刷入 system 分区）|"
-          echo ""
-          echo "### 🔧 本次编译内核特性（Linux ${KERNEL} · ${KERNEL_NOTE}）"
-          echo "| 特性 | 状态 | 说明 |"
-          echo "|------|------|------|"
-          echo "| BBR 拥塞控制 | ${BBR_STATUS} | |"
-          echo "| WiFi 固件加载 | ${WIFI_STATUS} | WCN3620 |"
-          echo "| 蓝牙支持 | ${BT_STATUS} | UFI001C 无蓝牙硬件，仅供参考 |"
-          echo "| USB 角色切换 | ✅ /sys/class/usb_role/ | 三版本一致 |"
-          echo "| 抢占模式 | ✅ PREEMPT（完全抢占）| 三版本一致 |"
-          echo "| 文件系统 | ✅ ext4（1024MB）| 三版本一致 |"
-          echo ""
-          echo "### 📊 三内核版本横向对比"
-          echo "| 内核 | 类型 | BBR | WiFi固件 | 推荐场景 |"
-          echo "|------|------|-----|---------|--------|"
-          if [ "${KERNEL}" = "6.6" ]; then
-            echo "| **6.6** ← 本次 | LTS | ❌ | ⚠️ 受限 | 极致稳定 |"
-          else
-            echo "| 6.6 | LTS | ❌ | ⚠️ 受限 | 极致稳定 |"
-          fi
-          if [ "${KERNEL}" = "6.12" ]; then
-            echo "| **6.12** ← 本次 | 标准 | ✅ | ✅ | 均衡推荐 |"
-          else
-            echo "| 6.12 | 标准 | ✅ | ✅ | 均衡推荐 |"
-          fi
-          if [ "${KERNEL}" = "6.18" ]; then
-            echo "| **6.18** ← 本次 | 最新 | ✅ | ✅ | 新特性体验 |"
-          else
-            echo "| 6.18 | 最新 | ✅ | ✅ | 新特性体验 |"
-          fi
-          echo ""
-          if [ -n "$EXTRA" ]; then
-            echo "### ➕ 本次额外添加的包"
-            echo "$EXTRA" | sed 's/^/- /'
-          else
-            echo "### ➕ 本次额外添加的包"
-            echo "无"
-          fi
         } >> release.txt
 
         echo "status=success" >> $GITHUB_OUTPUT
         echo "✅ Release 说明生成完成"
-        echo "   Tag: ${RELEASE_TAG} | 实际内核: ${KERNEL_VER} | ${KERNEL_MATCH_STATUS}"
 
-    # ✅ 修复错误2：- name 前恢复为4个空格（原来是8个导致YAML解析失败）
     - name: 🚀 上传固件到 Releases（正式发布）
       if: >-
         env.UPLOAD_RELEASE == 'true' &&
         steps.organize.outputs.status == 'success' &&
+        steps.pack_release.outputs.status == 'success' &&
         steps.tag.outputs.status == 'success' &&
         !cancelled()
       uses: ncipollo/release-action@main
@@ -664,7 +612,7 @@ jobs:
         tag: ${{ steps.tag.outputs.release_tag }}
         name: "ImmortalWrt ${{ github.event.inputs.profile }} kernel${{ github.event.inputs.kernel }}(${{ env.KERNEL_VER }}) ${{ env.FILE_DATE }}"
         bodyFile: release.txt
-        artifacts: ${{ env.FIRMWARE }}/**/*
+        artifacts: ${{ env.RELEASE_DIR }}/*.zip
         artifactErrorsFailBuild: false
         allowUpdates: true
         draft: false
