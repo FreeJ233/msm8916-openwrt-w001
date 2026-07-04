@@ -198,5 +198,30 @@ else
     }
 fi
 
+# -----------------------------------------------------------------
+# 第6节：设置 LuCI 默认语言为简体中文
+# 两种方式互为补充：
+#   方式A：预置 files/etc/config/luci（编译时直接打包进固件）
+#   方式B：uci-defaults 脚本（首次开机时写入，覆盖方式A）
+# -----------------------------------------------------------------
+echo ""
+echo ">>> 设置 LuCI 默认简体中文..."
+
+# 方式A：预置 /etc/config/luci 配置文件（直接打包进固件）
+mkdir -p package/base-files/files/etc/config
+LUCI_CONFIG="package/base-files/files/etc/config/luci"
+
+cat > "$LUCI_CONFIG" << 'EOF'
+# LuCI 配置文件
+# 由编译脚本自动生成，设置默认简体中文界面
+
+config core main
+    # ✅ 强制设置默认语言为简体中文
+    # zh_Hans = 简体中文（符合 OpenWrt/ImmortalWrt 语言代码规范）
+    option lang zh_Hans
+    # 默认主题（与 diy-part2.sh 第1节保持一致）
+    option mediaurlbase '/luci-static/argon'
+
+config 
 echo ""
 echo "✅ diy-part2.sh 全部执行完成"
