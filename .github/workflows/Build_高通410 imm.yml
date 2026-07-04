@@ -20,8 +20,8 @@ on:
         description: ' ↓ 选择内核版本（自动匹配上游支持的提交）↓ '
         type: choice
         options:
-          - 6.12
           - 6.18
+          - 6.12
           - 6.6
         default: 6.18
         required: true
@@ -508,7 +508,7 @@ jobs:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}_kernel${{ github.event.inputs.kernel }}
         path: ${{ env.FIRMWARE }}
 
-    - name: 📦 打包 Release 上传文件（固件 + 配置各一个 zip）
+    - name: 📦 打包 Release 单一压缩包（固件 + 配置合并）
       id: pack_release
       if: >-
         env.UPLOAD_RELEASE == 'true' &&
@@ -520,27 +520,34 @@ jobs:
         FILE_DATE_CLEAN=$(echo "${FILE_DATE}" | sed 's/^_//')
 
         RELEASE_DIR="${GITHUB_WORKSPACE}/release_upload"
-        mkdir -p "$RELEASE_DIR"
+        PACK_TMP="${GITHUB_WORKSPACE}/pack_tmp"
+        mkdir -p "$RELEASE_DIR" "$PACK_TMP"
 
-        FIRMWARE_ZIP="OpenWrt_firmware_openstick-${PROFILE}_${FILE_DATE_CLEAN}_kernel${KERNEL}.zip"
-        CONFIG_ZIP="build-config-${PROFILE}-kernel${KERNEL}.zip"
+        # 单一压缩包名字
+        RELEASE_ZIP="OpenWrt_openstick-${PROFILE}_${FILE_DATE_CLEAN}_kernel${KERNEL}.zip"
 
-        echo "📦 打包固件包: ${FIRMWARE_ZIP}"
-        cd "${FIRMWARE}"
-        zip -r "${RELEASE_DIR}/${FIRMWARE_ZIP}" ./*
+        # 1) 固件文件（boot.img / rootfs.img / manifest / sha256sums）
+        echo "📁 收集固件文件到 firmware/"
+        mkdir -p "${PACK_TMP}/firmware"
+        cp -r "${FIRMWARE}"/* "${PACK_TMP}/firmware/" 2>/dev/null || true
+
+        # 2) 编译配置文件（.config / feeds.conf.default / Makefile）
+        echo "📁 收集编译配置到 build-config/"
+        mkdir -p "${PACK_TMP}/build-config"
+        cp "${GITHUB_WORKSPACE}/openwrt/.config" "${PACK_TMP}/build-config/.config" 2>/dev/null || true
+        cp "${GITHUB_WORKSPACE}/openwrt/feeds.conf.default" "${PACK_TMP}/build-config/feeds.conf.default" 2>/dev/null || true
+        cp "${GITHUB_WORKSPACE}/openwrt/target/linux/msm89xx/Makefile" "${PACK_TMP}/build-config/Makefile" 2>/dev/null || true
+
+        # 3) 合并打包成一个 zip
+        echo "📦 打包为单一压缩包: ${RELEASE_ZIP}"
+        cd "${PACK_TMP}"
+        zip -r "${RELEASE_DIR}/${RELEASE_ZIP}" ./*
         cd -
 
-        echo "📦 打包配置包: ${CONFIG_ZIP}"
-        CONFIG_TMP=$(mktemp -d)
-        cp "${GITHUB_WORKSPACE}/openwrt/.config" "${CONFIG_TMP}/.config" 2>/dev/null || true
-        cp "${GITHUB_WORKSPACE}/openwrt/feeds.conf.default" "${CONFIG_TMP}/feeds.conf.default" 2>/dev/null || true
-        cp "${GITHUB_WORKSPACE}/openwrt/target/linux/msm89xx/Makefile" "${CONFIG_TMP}/Makefile" 2>/dev/null || true
-        cd "${CONFIG_TMP}"
-        zip -r "${RELEASE_DIR}/${CONFIG_ZIP}" ./*
-        cd -
-
-        echo "✅ Release 打包完成："
+        echo "✅ Release 单一压缩包完成："
         ls -lh "${RELEASE_DIR}"
+        echo "   压缩包内目录结构："
+        unzip -l "${RELEASE_DIR}/${RELEASE_ZIP}" | head -30
 
         echo "RELEASE_DIR=${RELEASE_DIR}" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
@@ -565,7 +572,6 @@ jobs:
         DISPLAY_IP=${CUSTOM_IP:-192.168.2.1}
         DISPLAY_HOSTNAME=${CUSTOM_HOSTNAME:-ImmortalWrt}
 
-        # 版本一致性校验
         if echo "${KERNEL_VER}" | grep -qE "^${KERNEL//./\\.}"; then
           KERNEL_MATCH_STATUS="✅ 与用户选择一致"
         else
