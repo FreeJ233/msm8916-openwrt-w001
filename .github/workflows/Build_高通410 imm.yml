@@ -131,99 +131,53 @@ jobs:
         echo "🎯 目标内核版本: Linux ${KERNEL}"
         echo "=================================================="
 
-        # --------------------------------------------------
         # 优先级 1：用户手动指定 hash
-        # --------------------------------------------------
         if [ -n "$CUSTOM_HASH" ]; then
-          echo "🔑 优先级1：使用用户手动指定的 hash"
-          echo "   Hash: $CUSTOM_HASH"
+          echo "🔑 优先级1：使用用户手动指定的 hash: $CUSTOM_HASH"
           echo "selected_hash=$CUSTOM_HASH" >> $GITHUB_OUTPUT
           echo "selection_reason=用户手动指定" >> $GITHUB_OUTPUT
           exit 0
         fi
 
-        # --------------------------------------------------
-        # 优先级 2：upstream_lock.txt 中的 hash（过滤注释行）
-        # ✅ 修复：支持注释行（# 开头），普通用户无需理会此文件
-        # --------------------------------------------------
+        # 优先级 2：upstream_lock.txt（支持注释行）
         if [ -f "$LOCK_FILE" ]; then
-          LOCKED_HASH=$(grep -v '^#' "$LOCK_FILE" \
-            | grep -v '^[[:space:]]*$' \
-            | head -1 \
-            | tr -d '[:space:]')
+          LOCKED_HASH=$(grep -v '^#' "$LOCK_FILE" | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')
           if [ -n "$LOCKED_HASH" ]; then
-            echo "🔒 优先级2：检测到 upstream_lock.txt，hash: $LOCKED_HASH"
-            echo "   ⚠️ 将验证此 hash 是否支持 Linux ${KERNEL}..."
+            echo "🔒 优先级2：upstream_lock.txt hash: $LOCKED_HASH"
             echo "selected_hash=$LOCKED_HASH" >> $GITHUB_OUTPUT
             echo "selection_reason=upstream_lock.txt 锁定" >> $GITHUB_OUTPUT
             exit 0
           fi
         fi
 
-        # --------------------------------------------------
-        # 优先级 3：自动从上游 git 历史智能查找
-        # 策略：克隆最近 200 条 commits 历史，从新到旧遍历
-        # 找到第一个同时满足：
-        #   a. 存在 target/linux/msm89xx/config-${KERNEL}
-        #   b. target/linux/msm89xx/Makefile 中 KERNEL_PATCHVER 为该版本
-        #      （或仅满足 a，即文件存在即可编译）
-        # --------------------------------------------------
+        # 优先级 3：自动从 git 历史智能查找
         echo "🤖 优先级3：自动智能查找支持 Linux ${KERNEL} 的最新上游提交..."
-        echo ""
-
-        # 浅克隆最近 200 条历史（节省时间和空间）
-        echo "📡 克隆上游仓库历史（depth=200）..."
-        git clone \
-          --depth=200 \
-          --no-checkout \
-          --filter=blob:none \
-          ${{ env.REPO_URL }} \
-          upstream_search
+        git clone --depth=200 --no-checkout --filter=blob:none ${{ env.REPO_URL }} upstream_search
         cd upstream_search
-
-        echo "🔍 开始从最新提交向前遍历，查找支持 Linux ${KERNEL} 的提交..."
-        echo ""
 
         FOUND_HASH=""
         FOUND_PATCHVER=""
         COMMIT_COUNT=0
         CHECKED_COUNT=0
-
-        # 获取所有提交 hash（从新到旧）
         ALL_COMMITS=$(git log --format="%H" origin/master)
         TOTAL=$(echo "$ALL_COMMITS" | wc -l)
-        echo "📊 共获取 $TOTAL 条历史提交，开始逐一验证..."
+        echo "📊 共获取 $TOTAL 条历史提交，开始验证..."
 
         for commit_hash in $ALL_COMMITS; do
           COMMIT_COUNT=$((COMMIT_COUNT + 1))
           CHECKED_COUNT=$((CHECKED_COUNT + 1))
 
-          # 检查此提交中 config-${KERNEL} 是否存在
-          CONFIG_EXISTS=$(git ls-tree -r "$commit_hash" \
-            --name-only 2>/dev/null \
-            | grep -c "^${TARGET_CONFIG}$" || true)
+          CONFIG_EXISTS=$(git ls-tree -r "$commit_hash" --name-only 2>/dev/null | grep -c "^${TARGET_CONFIG}$" || true)
 
           if [ "$CONFIG_EXISTS" -gt "0" ]; then
-            # config 文件存在，进一步获取 KERNEL_PATCHVER 值
-            PATCHVER=$(git show "${commit_hash}:${TARGET_MAKEFILE}" 2>/dev/null \
-              | grep "^KERNEL_PATCHVER" \
-              | cut -d= -f2 \
-              | tr -d '[:space:]' || echo "")
-
-            echo "  ✅ 找到候选提交 #${COMMIT_COUNT}: ${commit_hash:0:12}"
-            echo "     KERNEL_PATCHVER=${PATCHVER} | config-${KERNEL} 存在"
-
+            PATCHVER=$(git show "${commit_hash}:${TARGET_MAKEFILE}" 2>/dev/null | grep "^KERNEL_PATCHVER" | cut -d= -f2 | tr -d '[:space:]' || echo "")
+            echo "  ✅ 候选提交 #${COMMIT_COUNT}: ${commit_hash:0:12} PATCHVER=${PATCHVER}"
             FOUND_HASH="$commit_hash"
             FOUND_PATCHVER="$PATCHVER"
-
-            # 优先选择 KERNEL_PATCHVER 完全匹配的提交
             if [ "$PATCHVER" = "$KERNEL" ]; then
-              echo "  🎯 KERNEL_PATCHVER 精确匹配 ${KERNEL}，直接使用此提交！"
+              echo "  🎯 精确匹配！"
               break
             else
-              echo "  ℹ️  KERNEL_PATCHVER=${PATCHVER} 不匹配，但 config-${KERNEL} 存在"
-              echo "     继续查找精确匹配提交（最多再查 20 个）..."
-              # 继续查找精确匹配，但最多再往前找 20 个
               if [ "$CHECKED_COUNT" -gt "20" ]; then
                 echo "  ⏱ 超过额外查找限制，使用当前最佳候选"
                 break
@@ -235,25 +189,13 @@ jobs:
         cd ..
 
         if [ -z "$FOUND_HASH" ]; then
-          echo ""
-          echo "::error::❌ 在最近 ${TOTAL} 条提交历史中未找到支持 Linux ${KERNEL} 的提交！"
-          echo "::error::可能原因："
-          echo "::error::  1. 上游 lkiuyu/immortalwrt 尚未添加对 Linux ${KERNEL} 的支持"
-          echo "::error::  2. 克隆深度不足（当前 depth=200）"
-          echo "::error::解决方案：请改选其他内核版本（6.12 或 6.18）"
+          echo "::error::❌ 未找到支持 Linux ${KERNEL} 的提交！请改选其他内核版本"
           exit 1
         fi
 
-        echo ""
         echo "=================================================="
-        echo "✅ 智能选择结果："
-        echo "   Hash:           ${FOUND_HASH}"
-        echo "   短 Hash:        ${FOUND_HASH:0:12}"
-        echo "   上游 PATCHVER:  ${FOUND_PATCHVER}"
-        echo "   目标内核:       ${KERNEL}"
-        echo "   config 文件:    ${TARGET_CONFIG} ✅ 存在"
+        echo "✅ 智能选择: ${FOUND_HASH:0:12} PATCHVER=${FOUND_PATCHVER}"
         echo "=================================================="
-
         echo "selected_hash=${FOUND_HASH}" >> $GITHUB_OUTPUT
         echo "selection_reason=自动智能匹配（上游 PATCHVER=${FOUND_PATCHVER}）" >> $GITHUB_OUTPUT
 
@@ -263,33 +205,17 @@ jobs:
         df -hT $PWD
         SELECTED_HASH="${{ steps.smart_lock.outputs.selected_hash }}"
         REASON="${{ steps.smart_lock.outputs.selection_reason }}"
-
-        echo "=================================================="
-        echo "📡 克隆上游源码: ${{ env.REPO_URL }}"
-        echo "   分支: ${{ env.REPO_BRANCH }}"
-        echo "   选择策略: ${REASON}"
-        echo "   目标 Hash: ${SELECTED_HASH:0:12}..."
-        echo "=================================================="
-
+        echo "📡 克隆: ${{ env.REPO_URL }} 分支: ${{ env.REPO_BRANCH }}"
+        echo "   策略: ${REASON} | Hash: ${SELECTED_HASH:0:12}"
         git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
-
         if [ -n "$SELECTED_HASH" ]; then
-          echo "🔒 切换到选定提交: ${SELECTED_HASH:0:12}..."
           cd openwrt
           git checkout "$SELECTED_HASH"
-          echo "✅ 已切换到提交: $(git log --oneline -1)"
+          echo "✅ 已切换: $(git log --oneline -1)"
         fi
-
         ln -sf /mnt/openwrt $GITHUB_WORKSPACE/openwrt
         echo "✅ 源码准备完成"
 
-    # =========================================================
-    # ✅ Bug 24 核心修复：动态设置 KERNEL_PATCHVER
-    # 依据：target/linux/msm89xx/Makefile 中的 KERNEL_PATCHVER
-    # 是 OpenWrt 构建系统中唯一真正决定编译哪个内核的配置项
-    # .config 文件对内核版本选择完全无效
-    # 不修改此项则无论用户选 6.6/6.12/6.18 均编译同一内核
-    # =========================================================
     - name: 🔧 设置内核版本并三重验证
       run: |
         KERNEL="${{ github.event.inputs.kernel }}"
@@ -301,72 +227,53 @@ jobs:
         echo "🔧 内核版本设置与验证"
         echo "=================================================="
 
-        # --- 验证 1：用户 config 文件是否存在 ---
-        echo ""
+        # 验证1：用户 config 文件
         echo "📋 验证1：用户编译配置文件"
         if [ ! -f "${GITHUB_WORKSPACE}/${USER_CONFIG}" ]; then
           echo "::error::❌ 用户 config 不存在: ${USER_CONFIG}"
-          echo "::error::仓库中需要存在以下文件之一："
-          echo "::error::  config/ufi001c-6.6.config"
-          echo "::error::  config/ufi001c-6.12.config"
-          echo "::error::  config/ufi001c-6.18.config"
+          echo "::error::需要: config/ufi001c-6.6.config / 6.12.config / 6.18.config"
           exit 1
         fi
-        echo "  ✅ 用户配置文件存在: ${USER_CONFIG}"
+        echo "  ✅ ${USER_CONFIG} 存在"
 
-        # --- 验证 2：上游源码中 config-X.XX 是否存在 ---
-        echo ""
+        # 验证2：上游 config 文件
         echo "📋 验证2：上游内核配置文件"
-        echo "  当前上游支持的所有内核版本："
-        ls openwrt/target/linux/msm89xx/config-* 2>/dev/null \
-          | while read f; do
-              VER=$(basename "$f" | sed 's/config-//')
-              if [ "$VER" = "$KERNEL" ]; then
-                echo "    ✅ Linux ${VER}  ← 当前选择"
-              else
-                echo "    ℹ️  Linux ${VER}"
-              fi
-            done
-
+        ls openwrt/target/linux/msm89xx/config-* 2>/dev/null | while read f; do
+          VER=$(basename "$f" | sed 's/config-//')
+          if [ "$VER" = "$KERNEL" ]; then
+            echo "    ✅ Linux ${VER} ← 当前选择"
+          else
+            echo "    ℹ️  Linux ${VER}"
+          fi
+        done
         if [ ! -f "$UPSTREAM_CONFIG" ]; then
-          echo "::error::❌ 上游不包含 config-${KERNEL}，无法编译此内核版本！"
+          echo "::error::❌ 上游不包含 config-${KERNEL}"
           exit 1
         fi
         echo "  ✅ 上游 config-${KERNEL} 存在"
 
-        # --- 核心操作：修改 KERNEL_PATCHVER ---
-        echo ""
+        # 核心：修改 KERNEL_PATCHVER
         echo "📋 修改 KERNEL_PATCHVER:"
         echo "  修改前: $(grep 'KERNEL_PATCHVER' $MAKEFILE)"
         sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=${KERNEL}/" "$MAKEFILE"
         echo "  修改后: $(grep 'KERNEL_PATCHVER' $MAKEFILE)"
 
-        # --- 验证 3：KERNEL_PATCHVER 修改是否成功 ---
-        echo ""
+        # 验证3：写入确认
         echo "📋 验证3：KERNEL_PATCHVER 写入确认"
-        ACTUAL=$(grep "^KERNEL_PATCHVER" "$MAKEFILE" \
-          | cut -d= -f2 \
-          | tr -d '[:space:]')
+        ACTUAL=$(grep "^KERNEL_PATCHVER" "$MAKEFILE" | cut -d= -f2 | tr -d '[:space:]')
         if [ "$ACTUAL" != "${KERNEL}" ]; then
-          echo "::error::❌ KERNEL_PATCHVER 写入失败！"
-          echo "::error::期望: ${KERNEL}，实际读回: ${ACTUAL}"
+          echo "::error::❌ KERNEL_PATCHVER 写入失败！期望: ${KERNEL} 实际: ${ACTUAL}"
           exit 1
         fi
-        echo "  ✅ KERNEL_PATCHVER 已确认写入: ${ACTUAL}"
+        echo "  ✅ KERNEL_PATCHVER=${ACTUAL} 确认"
 
-        echo ""
         echo "=================================================="
-        echo "✅ 三重验证全部通过！"
-        echo "   将编译: Linux ${KERNEL} for ufi001c"
-        echo "   用户配置: ${USER_CONFIG}"
-        echo "   上游 config: config-${KERNEL}"
-        echo "   KERNEL_PATCHVER: ${ACTUAL}"
+        echo "✅ 三重验证通过！将编译 Linux ${KERNEL} for ufi001c"
         echo "=================================================="
 
     - name: 📝 加载自定义 feeds 源并执行前置脚本
       run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default \
-          && echo "✅ 已替换 feeds.conf.default"
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default && echo "✅ 已替换 feeds.conf.default"
         chmod +x $DIY_P1_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
@@ -381,24 +288,20 @@ jobs:
     - name: 🗑️ 删除 smpackage 与官方 feeds 中的冲突包
       run: |
         echo "🗑️ 删除 smpackage 自身携带的系统基础包..."
-        rm -rf openwrt/feeds/smpackage/{base-files,dnsmasq,firewall*,fullconenat,\
-        libnftnl,nftables,ppp,opkg,ucl,upx,vsftpd*,miniupnpd-iptables,wireless-regdb}
+        # ✅ 修复错误3：不使用反斜杠续行，改为单行避免缩进空格混入包名
+        rm -rf openwrt/feeds/smpackage/base-files openwrt/feeds/smpackage/dnsmasq openwrt/feeds/smpackage/firewall* openwrt/feeds/smpackage/fullconenat openwrt/feeds/smpackage/libnftnl openwrt/feeds/smpackage/nftables openwrt/feeds/smpackage/ppp openwrt/feeds/smpackage/opkg openwrt/feeds/smpackage/ucl openwrt/feeds/smpackage/upx openwrt/feeds/smpackage/vsftpd* openwrt/feeds/smpackage/miniupnpd-iptables openwrt/feeds/smpackage/wireless-regdb
 
         echo "🗑️ 删除 luci feed 中与 smpackage 冲突的包..."
         rm -rf openwrt/feeds/luci/applications/luci-app-mosdns
 
         echo "🗑️ 删除 packages feed 中与 smpackage 冲突的包..."
-        rm -rf openwrt/feeds/packages/net/{alist,adguardhome,mosdns,\
-        xray-core,xray-plugin,v2ray-core,v2ray-geodata,sing-box,smartdns}
+        # ✅ 修复错误4：同样改为单行
+        rm -rf openwrt/feeds/packages/net/alist openwrt/feeds/packages/net/adguardhome openwrt/feeds/packages/net/mosdns openwrt/feeds/packages/net/xray-core openwrt/feeds/packages/net/xray-plugin openwrt/feeds/packages/net/v2ray-core openwrt/feeds/packages/net/v2ray-geodata openwrt/feeds/packages/net/sing-box openwrt/feeds/packages/net/smartdns
         rm -rf openwrt/feeds/packages/utils/v2dat
 
-        # ✅ 修复：添加 fallback，若 1.26 分支不存在则克隆默认分支
         echo "🔄 替换 golang 为 kenzok8 维护版本..."
         rm -rf openwrt/feeds/packages/lang/golang
-        git clone https://github.com/kenzok8/golang \
-          -b 1.26 openwrt/feeds/packages/lang/golang \
-          || git clone https://github.com/kenzok8/golang \
-               openwrt/feeds/packages/lang/golang
+        git clone https://github.com/kenzok8/golang -b 1.26 openwrt/feeds/packages/lang/golang || git clone https://github.com/kenzok8/golang openwrt/feeds/packages/lang/golang
         echo "✅ 冲突包处理完成"
 
     - name: 📦 安装所有 feeds 软件包
@@ -409,13 +312,9 @@ jobs:
 
     - name: ⚙️ 加载自定义配置文件并执行后置脚本
       run: |
-        [ -e files ] && mv files openwrt/files \
-          && echo "✅ 已复制 files/ 目录到源码"
-
-        # ✅ 修复：文件已在"三重验证"步骤确认存在，此处直接加载
+        [ -e files ] && mv files openwrt/files && echo "✅ 已复制 files/ 目录到源码"
         mv "$CONFIG_FILE" openwrt/.config
         echo "✅ 已加载编译配置: $CONFIG_FILE"
-
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
@@ -425,10 +324,7 @@ jobs:
       if: ${{ inputs.extra_packages != '' }}
       run: |
         cd openwrt
-        echo "=========================================="
-        echo "📦 用户请求的额外包："
-        echo "${{ inputs.extra_packages }}"
-        echo "=========================================="
+        echo "📦 用户请求的额外包: ${{ inputs.extra_packages }}"
 
         RAW='${{ inputs.extra_packages }}'
         CUSTOM_IP=$(echo "$RAW" | grep -oP '(?<=__ip__)[^,\s]+' || true)
@@ -436,32 +332,21 @@ jobs:
 
         if [ -n "$CUSTOM_IP" ]; then
           echo "🌐 设置管理 IP: $CUSTOM_IP"
-          sed -i "s/192\.168\.2\.1/$CUSTOM_IP/g" \
-            package/base-files/files/bin/config_generate
+          sed -i "s/192\.168\.2\.1/$CUSTOM_IP/g" package/base-files/files/bin/config_generate
         fi
 
         if [ -n "$CUSTOM_HOSTNAME" ]; then
           echo "🏷️ 设置主机名: $CUSTOM_HOSTNAME"
-          sed -i "s/set system\.@system\[0\]\.hostname='ImmortalWrt'\
-            /set system.@system[0].hostname='$CUSTOM_HOSTNAME'/" \
-            package/base-files/files/bin/config_generate || true
-          sed -i "s/option hostname 'ImmortalWrt'\
-            /option hostname '$CUSTOM_HOSTNAME'/" \
-            package/base-files/files/etc/config/system 2>/dev/null || true
+          # ✅ 修复错误5：sed 表达式不跨行，避免缩进空格混入正则
+          sed -i "s/set system\.@system\[0\]\.hostname='ImmortalWrt'/set system.@system[0].hostname='$CUSTOM_HOSTNAME'/" package/base-files/files/bin/config_generate || true
+          sed -i "s/option hostname 'ImmortalWrt'/option hostname '$CUSTOM_HOSTNAME'/" package/base-files/files/etc/config/system 2>/dev/null || true
         fi
 
-        PACKAGES=$(echo "$RAW" | sed 's/,/ /g' | tr ' ' '\n' \
-          | grep -v '^__ip__' \
-          | grep -v '^__hostname__' \
-          | tr '\n' ' ')
+        PACKAGES=$(echo "$RAW" | sed 's/,/ /g' | tr ' ' '\n' | grep -v '^__ip__' | grep -v '^__hostname__' | tr '\n' ' ')
 
         if echo "$PACKAGES" | grep -qw "luci-app-turboacc"; then
           echo "⚡ 检测到 luci-app-turboacc，执行 turboacc 安装脚本..."
-          curl -sSL \
-            https://raw.githubusercontent.com/mufeng05/turboacc/main/add_turboacc.sh \
-            -o add_turboacc.sh \
-            && bash add_turboacc.sh \
-            || echo "⚠️ turboacc 脚本执行失败，跳过"
+          curl -sSL https://raw.githubusercontent.com/mufeng05/turboacc/main/add_turboacc.sh -o add_turboacc.sh && bash add_turboacc.sh || echo "⚠️ turboacc 脚本执行失败，跳过"
         fi
 
         for pkg in $PACKAGES; do
@@ -491,13 +376,6 @@ jobs:
         cd openwrt
         make defconfig
         echo "✅ defconfig 生成完成"
-
-        # 最终确认内核版本写入情况
-        echo ""
-        echo "📋 最终 .config 内核相关配置："
-        grep -E "KERNEL_PATCHVER|CONFIG_LINUX_" .config 2>/dev/null \
-          | head -10 || echo "（使用 Makefile KERNEL_PATCHVER 控制，.config 无需额外项）"
-
         echo "📋 编译包数量: $(grep -c '=y' .config || true)"
 
     - name: ⬇️ 下载编译所需的软件包源码
@@ -506,7 +384,6 @@ jobs:
         cd openwrt
         echo "📡 开始下载依赖包..."
         make download -j4 V=s
-        echo "🔍 检查并清理下载不完整的文件..."
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
         echo "✅ 软件包下载完成"
@@ -514,9 +391,7 @@ jobs:
     - name: 📤 上传 defconfig 编译配置（供调试参考）
       uses: actions/upload-artifact@main
       with:
-        name: >-
-          build-config-${{ github.event.inputs.profile
-          }}-kernel${{ github.event.inputs.kernel }}
+        name: build-config-${{ github.event.inputs.profile }}-kernel${{ github.event.inputs.kernel }}
         path: |
           ${{ github.workspace }}/openwrt/.config
           ${{ github.workspace }}/openwrt/feeds.conf.default
@@ -531,27 +406,58 @@ jobs:
         echo "📌 内核版本: ${{ github.event.inputs.kernel }}"
         make -j$(nproc) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config \
-          | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] \
-          && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "✅ 固件编译完成！"
 
     - name: 🔍 获取编译固件的实际内核版本
+      if: steps.compile.outputs.status == 'success'
       run: |
-        KERNEL_VER=$(cat /mnt/openwrt/build_dir/target-*/linux-*/linux-*/.kernelversion \
-          2>/dev/null | head -1 || echo "未知")
-        echo "KERNEL_VER=$KERNEL_VER" >> $GITHUB_ENV
-        echo "📌 实际编译内核版本: $KERNEL_VER"
+        echo "🔍 多路径探测真实内核版本..."
+        KERNEL_VER=""
 
-        # 验证实际编译内核与用户选择是否一致
+        # 方法1：.kernelversion 文件（最权威）
+        # ✅ 修复错误6：用 find 替代 glob，避免路径匹配失败
+        KVER_FILE=$(find /mnt/openwrt/build_dir/ -maxdepth 4 -name ".kernelversion" 2>/dev/null | head -1)
+        if [ -n "$KVER_FILE" ] && [ -f "$KVER_FILE" ]; then
+          KERNEL_VER=$(cat "$KVER_FILE" | tr -d '[:space:]')
+          echo "✅ 方法1成功：$KVER_FILE → ${KERNEL_VER}"
+        fi
+
+        # 方法2：编译目录名（格式 linux-X.XX.XX）
+        if [ -z "$KERNEL_VER" ]; then
+          KDIR=$(find /mnt/openwrt/build_dir/ -maxdepth 4 -mindepth 3 -type d -name "linux-[0-9]*" 2>/dev/null | head -1)
+          if [ -n "$KDIR" ]; then
+            KERNEL_VER=$(basename "$KDIR" | sed 's/^linux-//')
+            echo "✅ 方法2成功：$(basename $KDIR) → ${KERNEL_VER}"
+          fi
+        fi
+
+        # 方法3：manifest 文件
+        if [ -z "$KERNEL_VER" ]; then
+          KERNEL_VER=$(find /mnt/openwrt/bin/targets/ -name "*.manifest" 2>/dev/null | head -1 | xargs grep -m1 "^kernel" 2>/dev/null | awk '{print $2}' || echo "")
+          if [ -n "$KERNEL_VER" ]; then
+            echo "✅ 方法3成功：manifest → ${KERNEL_VER}"
+          fi
+        fi
+
+        # 方法4：兜底
+        if [ -z "$KERNEL_VER" ]; then
+          KERNEL_VER="${{ github.event.inputs.kernel }}.x（探测失败）"
+          echo "⚠️ 方法1-3均失败，使用兜底值"
+          echo "编译目录结构："
+          find /mnt/openwrt/build_dir/ -maxdepth 4 -type d 2>/dev/null | head -20 || true
+        fi
+
+        echo "KERNEL_VER=${KERNEL_VER}" >> $GITHUB_ENV
+        echo "📌 实际编译内核: ${KERNEL_VER}"
+
         SELECTED="${{ github.event.inputs.kernel }}"
-        if echo "$KERNEL_VER" | grep -q "^${SELECTED}"; then
-          echo "✅ 实际内核版本 ${KERNEL_VER} 与选择 ${SELECTED} 一致"
+        if echo "${KERNEL_VER}" | grep -qE "^${SELECTED//./\\.}"; then
+          echo "✅ 版本一致性验证通过：实际 ${KERNEL_VER} 匹配选择 ${SELECTED}"
         else
-          echo "⚠️ 注意：实际内核 ${KERNEL_VER} 与选择 ${SELECTED} 存在差异"
-          echo "   这可能是小版本号不同（正常），请核对 Release 说明"
+          echo "⚠️ 注意：实际 ${KERNEL_VER} / 选择 ${SELECTED}（主版本不同请排查）"
         fi
 
     - name: 💾 查看编译服务器剩余磁盘空间
@@ -565,9 +471,7 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
-        name: >-
-          OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE
-          }}_kernel${{ github.event.inputs.kernel }}
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}_kernel${{ github.event.inputs.kernel }}
         path: openwrt/bin
 
     - name: 📁 整理固件输出文件（提取 boot.img + rootfs.img）
@@ -576,23 +480,19 @@ jobs:
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
-
         echo "🔍 查找固件文件..."
         ls -la
 
         BOOT_IMG=$(ls *boot.img.gz *boot.img 2>/dev/null | head -1)
-        SYSTEM_IMG=$(ls *system.img.gz *system.img \
-          *rootfs.img.gz *rootfs.img 2>/dev/null | head -1)
+        SYSTEM_IMG=$(ls *system.img.gz *system.img *rootfs.img.gz *rootfs.img 2>/dev/null | head -1)
 
         if [ -z "$BOOT_IMG" ] || [ -z "$SYSTEM_IMG" ]; then
-          echo "::error::❌ 固件文件未找到！当前目录："
+          echo "::error::❌ 固件文件未找到！"
           ls -la
           exit 1
         fi
 
-        echo "✅ 找到 boot 文件: $BOOT_IMG"
-        echo "✅ 找到 rootfs 文件: $SYSTEM_IMG"
-
+        echo "✅ boot: $BOOT_IMG | rootfs: $SYSTEM_IMG"
         mkdir -p firmware_output
 
         if echo "$BOOT_IMG" | grep -q '\.gz$'; then
@@ -612,9 +512,8 @@ jobs:
         cp *.manifest firmware_output/ 2>/dev/null || true
         cp sha256sums firmware_output/ 2>/dev/null || true
 
-        echo "✅ 固件输出文件清单："
+        echo "✅ 固件输出清单："
         ls -lh firmware_output/
-
         echo "FIRMWARE=$PWD/firmware_output" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
@@ -622,12 +521,11 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: >-
-          OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE
-          }}_kernel${{ github.event.inputs.kernel }}
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}_kernel${{ github.event.inputs.kernel }}
         path: ${{ env.FIRMWARE }}
 
-        - name: 🏷️ 生成 Release 标签与说明文件
+    # ✅ 修复错误1：- name 前恢复为4个空格（原来是8个导致YAML解析失败）
+    - name: 🏷️ 生成 Release 标签与说明文件
       id: tag
       if: >-
         env.UPLOAD_RELEASE == 'true' &&
@@ -636,52 +534,43 @@ jobs:
       run: |
         PROFILE="${{ github.event.inputs.profile }}"
         KERNEL="${{ github.event.inputs.kernel }}"
-        # ✅ 修复：在 run 脚本中读取环境变量，而非 YAML 表达式
-        # ${{ env.KERNEL_VER }} 在 YAML 层可能因时序问题读到空值
-        # 改用 $KERNEL_VER 在 shell 中直接读取，确保拿到编译后的真实值
+        # ✅ shell 层读取 KERNEL_VER，避免 YAML 表达式时序问题
         KERNEL_VER="${KERNEL_VER}"
         RAW='${{ inputs.extra_packages }}'
         CUSTOM_IP=$(echo "$RAW" | grep -oP '(?<=__ip__)[^,\s]+' || true)
         CUSTOM_HOSTNAME=$(echo "$RAW" | grep -oP '(?<=__hostname__)[^,\s]+' || true)
         DISPLAY_IP=${CUSTOM_IP:-192.168.2.1}
         DISPLAY_HOSTNAME=${CUSTOM_HOSTNAME:-ImmortalWrt}
-        EXTRA=$(echo "$RAW" | sed 's/,/ /g' | tr ' ' '\n' \
-          | grep -v '^__ip__' | grep -v '^__hostname__' | sed '/^$/d')
+        EXTRA=$(echo "$RAW" | sed 's/,/ /g' | tr ' ' '\n' | grep -v '^__ip__' | grep -v '^__hostname__' | sed '/^$/d')
         SELECTED_HASH="${{ steps.smart_lock.outputs.selected_hash }}"
         REASON="${{ steps.smart_lock.outputs.selection_reason }}"
 
-        # -------------------------------------------------------
-        # ✅ 内核版本一致性最终校验
-        # 对比用户选择（主版本）与实际编译版本，给出明确结论
-        # -------------------------------------------------------
+        # 版本一致性校验
         if echo "${KERNEL_VER}" | grep -qE "^${KERNEL//./\\.}"; then
           KERNEL_MATCH_STATUS="✅ 与用户选择一致"
         else
           KERNEL_MATCH_STATUS="⚠️ 请核对（实际: ${KERNEL_VER} / 选择: ${KERNEL}）"
         fi
 
-        # -------------------------------------------------------
-        # ✅ 根据内核版本生成对应的特性说明
-        # 对照上游三个 config 文件的实际差异，如实描述
-        # -------------------------------------------------------
+        # 根据内核版本生成特性说明
         case "${KERNEL}" in
           6.6)
             BBR_STATUS="❌ 不支持（上游 TCP_CONG_ADVANCED=n，使用 cubic）"
-            WIFI_STATUS="⚠️ 受限（上游 QCOM_WCNSS_CTRL=n，固件加载可能不稳定）"
-            BT_STATUS="❌ 不支持（上游无 BT/BT_QCA 配置）"
+            WIFI_STATUS="⚠️ 受限（上游 QCOM_WCNSS_CTRL=n）"
+            BT_STATUS="❌ 不支持（上游无 BT/BT_QCA）"
             KERNEL_NOTE="LTS 长期支持内核，稳定优先，部分功能受限"
             ;;
           6.12)
-            BBR_STATUS="✅ 支持（kmod-tcp-bbr 模块，上游 TCP_CONG_BBR=m）"
+            BBR_STATUS="✅ 支持（kmod-tcp-bbr，上游 TCP_CONG_BBR=m）"
             WIFI_STATUS="✅ 完整支持（上游 QCOM_WCNSS_CTRL=y）"
             BT_STATUS="✅ 支持（上游 BT_QCA=y）"
             KERNEL_NOTE="标准内核，功能完整，均衡推荐"
             ;;
           6.18)
-            BBR_STATUS="✅ 支持（kmod-tcp-bbr 模块，上游 TCP_CONG_BBR=m）"
+            BBR_STATUS="✅ 支持（kmod-tcp-bbr，上游 TCP_CONG_BBR=m）"
             WIFI_STATUS="✅ 完整支持（上游 QCOM_WCNSS_CTRL=y）"
             BT_STATUS="✅ 支持（上游 BT=y）"
-            KERNEL_NOTE="最新稳定内核，新特性体验，当前上游默认版本"
+            KERNEL_NOTE="最新稳定内核，当前上游默认版本"
             ;;
           *)
             BBR_STATUS="未知"
@@ -691,9 +580,6 @@ jobs:
             ;;
         esac
 
-        # -------------------------------------------------------
-        # Release tag：包含真实内核版本号
-        # -------------------------------------------------------
         RELEASE_TAG="$(date +"%Y.%m.%d-%H%M")-${PROFILE}-kernel${KERNEL}"
         echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
 
@@ -707,7 +593,6 @@ jobs:
           echo "| 编译者 | ${{ github.actor }} |"
           echo "| 机型 | ${PROFILE} |"
           echo "| 用户选择内核 | Linux ${KERNEL} |"
-          # ✅ 核心修复：显示真实编译内核版本
           echo "| **实际编译内核** | **${KERNEL_VER}** |"
           echo "| 版本一致性 | ${KERNEL_MATCH_STATUS} |"
           echo "| 上游提交 | \`${SELECTED_HASH:0:12}\` |"
@@ -723,7 +608,6 @@ jobs:
           echo "| boot.img | 引导分区镜像（刷入 boot 分区）|"
           echo "| rootfs.img | 系统根文件系统镜像（刷入 system 分区）|"
           echo ""
-          # ✅ 核心修复：根据实际内核版本显示真实特性支持情况
           echo "### 🔧 本次编译内核特性（Linux ${KERNEL} · ${KERNEL_NOTE}）"
           echo "| 特性 | 状态 | 说明 |"
           echo "|------|------|------|"
@@ -763,15 +647,11 @@ jobs:
         } >> release.txt
 
         echo "status=success" >> $GITHUB_OUTPUT
-        echo "✅ Release 说明文件生成完成"
-        echo ""
-        echo "📋 Release 内容预览："
-        echo "   Tag:      ${RELEASE_TAG}"
-        echo "   选择内核: Linux ${KERNEL}"
-        echo "   实际内核: ${KERNEL_VER}"
-        echo "   一致性:   ${KERNEL_MATCH_STATUS}"
+        echo "✅ Release 说明生成完成"
+        echo "   Tag: ${RELEASE_TAG} | 实际内核: ${KERNEL_VER} | ${KERNEL_MATCH_STATUS}"
 
-        - name: 🚀 上传固件到 Releases（正式发布）
+    # ✅ 修复错误2：- name 前恢复为4个空格（原来是8个导致YAML解析失败）
+    - name: 🚀 上传固件到 Releases（正式发布）
       if: >-
         env.UPLOAD_RELEASE == 'true' &&
         steps.organize.outputs.status == 'success' &&
@@ -782,12 +662,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag: ${{ steps.tag.outputs.release_tag }}
-        # ✅ 修复：Release 标题同时显示选择版本和真实版本
-        # 格式：ImmortalWrt ufi001c kernel6.12(6.12.28) _202507040830
-        name: >-
-          ImmortalWrt ${{ github.event.inputs.profile }}
-          kernel${{ github.event.inputs.kernel }}(${{ env.KERNEL_VER }})
-          ${{ env.FILE_DATE }}
+        name: "ImmortalWrt ${{ github.event.inputs.profile }} kernel${{ github.event.inputs.kernel }}(${{ env.KERNEL_VER }}) ${{ env.FILE_DATE }}"
         bodyFile: release.txt
         artifacts: ${{ env.FIRMWARE }}/**/*
         artifactErrorsFailBuild: false
@@ -805,8 +680,6 @@ jobs:
         echo "🔍 查询 Workflow 运行记录..."
         RUNS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
           "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=100")
-
-        # ✅ 修复：正确的时间戳比较（创建时间 < 截止时间）
         CUTOFF=$(date -d "-${RETAIN_DAYS} days" +%s)
         DEL_IDS=$(echo "$RUNS" | jq -r \
           --argjson cutoff "$CUTOFF" \
@@ -819,12 +692,11 @@ jobs:
           | .[:-$keep]
           | .[].id
         ')
-
         if [[ -z "$DEL_IDS" ]]; then
           echo "✅ 没有需要清理的旧运行记录"
         else
           echo "$DEL_IDS" | while read run_id; do
-            echo "🗑️ 正在删除运行记录 ID: $run_id"
+            echo "🗑️ 删除运行记录 ID: $run_id"
             curl -X DELETE -H "Authorization: token $GITHUB_TOKEN" \
               "https://api.github.com/repos/${{ github.repository }}/actions/runs/$run_id"
           done
