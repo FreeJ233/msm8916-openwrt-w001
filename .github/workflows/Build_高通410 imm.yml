@@ -23,7 +23,7 @@ on:
           - 6.12
           - 6.18
           - 6.6
-        default: 6.18
+        default: 6.12
         required: true
       upstream:
         description: ' ↓ 选择上游源码仓库 ↓ '
