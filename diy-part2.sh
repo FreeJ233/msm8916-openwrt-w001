@@ -207,21 +207,45 @@ fi
 echo ""
 echo ">>> 设置 LuCI 默认简体中文..."
 
-# 方式A：预置 /etc/config/luci 配置文件（直接打包进固件）
+# ---------------------------
+# 方式A：预置 /etc/config/luci
+# ---------------------------
 mkdir -p package/base-files/files/etc/config
-LUCI_CONFIG="package/base-files/files/etc/config/luci"
 
-cat > "$LUCI_CONFIG" << 'EOF'
-# LuCI 配置文件
-# 由编译脚本自动生成，设置默认简体中文界面
+cat > package/base-files/files/etc/config/luci << 'EOF'
+config core 'main'
+	option lang zh_Hans
+	option mediaurlbase '/luci-static/argon'
 
-config core main
-    # ✅ 强制设置默认语言为简体中文
-    # zh_Hans = 简体中文（符合 OpenWrt/ImmortalWrt 语言代码规范）
-    option lang zh_Hans
-    # 默认主题（与 diy-part2.sh 第1节保持一致）
-    option mediaurlbase '/luci-static/argon'
+config extern 'flash_keep'
+	option uci '/etc/config/uci'
+EOF
 
-config 
+echo "  ✓ 方式A：/etc/config/luci 已预置（lang=zh_Hans，theme=argon）"
+
+# ---------------------------
+# 方式B：uci-defaults 脚本
+# ---------------------------
+mkdir -p package/base-files/files/etc/uci-defaults
+
+cat > package/base-files/files/etc/uci-defaults/99-luci-language << 'EOF'
+#!/bin/sh
+# 首次开机自动执行：强制写入 LuCI 默认语言和主题
+# 即使方式A的配置文件被 flash_keep 覆盖，此脚本仍可兜底
+
+uci -q batch << 'UCIEOF'
+set luci.main=core
+set luci.main.lang=zh_Hans
+set luci.main.mediaurlbase=/luci-static/argon
+UCIEOF
+
+uci commit luci
+
+exit 0
+EOF
+
+chmod +x package/base-files/files/etc/uci-defaults/99-luci-language
+echo "  ✓ 方式B：uci-defaults/99-luci-language 已写入（首次开机兜底）"
+
 echo ""
 echo "✅ diy-part2.sh 全部执行完成"
