@@ -15,7 +15,7 @@ on:
         options:
           - ufi001c
           - w001
-        default: ufi001c
+        default: w001           # 修改点：默认机型改为 w001
         required: true
       kernel:
         description: ' ↓ 选择内核版本（自动匹配上游支持的提交）↓ '
@@ -228,7 +228,7 @@ jobs:
         echo "📋 验证1：用户编译配置文件"
         if [ ! -f "${GITHUB_WORKSPACE}/${USER_CONFIG}" ]; then
           echo "::error::❌ 用户 config 不存在: ${USER_CONFIG}"
-          echo "::error::需要: config/ufi001c-6.6.config / 6.12.config / 6.18.config"
+          echo "::error::需要: config/ufi001c-6.6.config / 6.12.config / 6.18.config 或 w001 对应文件"
           exit 1
         fi
         echo "  ✅ ${USER_CONFIG} 存在"
@@ -262,7 +262,8 @@ jobs:
         echo "  ✅ KERNEL_PATCHVER=${ACTUAL} 确认"
 
         echo "=================================================="
-        echo "✅ 三重验证通过！将编译 Linux ${KERNEL} for ufi001c"
+        # 修改点：输出当前选择的机型（动态）
+        echo "  ✅ 三重验证通过！将编译 Linux ${KERNEL} for ${{ github.event.inputs.profile }}"
         echo "=================================================="
 
     - name: 📝 加载自定义 feeds 源并执行前置脚本
