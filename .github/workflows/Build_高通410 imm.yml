@@ -14,6 +14,7 @@ on:
         type: choice
         options:
           - ufi001c
+          - w001
         default: ufi001c
         required: true
       kernel:
