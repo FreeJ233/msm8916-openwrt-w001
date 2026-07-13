@@ -3,7 +3,7 @@
 # 修复：
 #   1. 移除对 10_system.js 的 sed 注入（原因：破坏 JS 导致 LuCI Loading view 卡死）
 #   2. 移除所有 Argon CSS 修改、字体替换、footer/logo 修改
-#   3. 只保留背景图替换
+#   3. 只保留背景图替换  → 已删除此功能
 #   4. 加强默认中文写入方式
 
 # -----------------------------------------------------------------
@@ -40,25 +40,25 @@ else
 fi
 echo "✅ BBR + fq 已写入 sysctl.conf"
 
-# -----------------------------------------------------------------
-# 4. Argon 主题 - 只替换背景图（其它美化全部移除）
-# -----------------------------------------------------------------
-ARGON_BASE="./feeds/luci/themes/luci-theme-argon"
-ARGON_IMG="${ARGON_BASE}/htdocs/luci-static/argon/img"
-
+# =================================================================
+# 4. 自定义包替换（helloworld + golang 1.23）
+#    此部分必须在 feeds 更新并安装之后执行
+# =================================================================
 echo ""
-echo ">>> 检查 Argon 主题背景图替换..."
+echo ">>> 开始自定义包替换（helloworld + golang）..."
 
-if [ ! -d "${ARGON_BASE}" ]; then
-    echo "  ⚠ luci-theme-argon 未找到，跳过"
-elif [ ! -d "${ARGON_IMG}" ]; then
-    echo "  ⚠ Argon img 目录未找到，跳过"
-elif [ ! -f "${GITHUB_WORKSPACE}/argon/bg1.jpg" ]; then
-    echo "  ⚠ 仓库中 argon/bg1.jpg 不存在，跳过"
-else
-    cp -f "${GITHUB_WORKSPACE}/argon/bg1.jpg" "${ARGON_IMG}/bg1.jpg"
-    echo "  ✓ 背景图 bg1.jpg 已替换"
-fi
+# 移除 feeds 中自带的 xray/v2ray/sing-box（与 helloworld 冲突）
+rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}
 
+# 克隆 helloworld 包（sbwml 维护版）到 package/ 目录
+git clone https://github.com/sbwml/openwrt_helloworld package/helloworld
+
+# 替换 golang 为 1.23.x 版本（sbwml 维护）
+rm -rf feeds/packages/lang/golang
+git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
+
+echo "✅ 自定义包替换完成（helloworld + golang 1.23）"
+
+# -----------------------------------------------------------------
 echo ""
 echo "✅ diy-part2.sh 全部执行完成"
