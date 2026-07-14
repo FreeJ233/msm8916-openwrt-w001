@@ -55,7 +55,7 @@ git clone https://github.com/sbwml/openwrt_helloworld package/helloworld
 
 # 替换 golang 为 1.23.x 版本（sbwml 维护）
 rm -rf feeds/packages/lang/golang
-git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
+git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
 
 echo "✅ 自定义包替换完成（helloworld + golang 1.23）"
 
